@@ -1,3 +1,4 @@
+import { IMAGE_TYPES, MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
 import { IMAGE_TYPES, MODULE_ID } from "../constants.mjs";
 import { getActorModuleData } from "../utils/flag-utils.mjs";
 import { pickRandomImage, sortImagesByOrder } from "../logic/RandomMode.mjs";
@@ -39,6 +40,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const data = getActorModuleData(this.actor);
     const tokenImages = sortImagesByOrder(data.tokenImages ?? []);
     const portraitImages = sortImagesByOrder(data.portraitImages ?? []);
+    const activeTokenImageId = this.tokenDocument?.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
+    const activePortraitImageId = this.tokenDocument?.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
     const activeTokenImageId = this.tokenDocument?.getFlag(MODULE_ID, "activeTokenImageId");
     const activePortraitImageId = this.tokenDocument?.getFlag(MODULE_ID, "activePortraitImageId");
 

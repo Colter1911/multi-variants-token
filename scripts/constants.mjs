@@ -21,3 +21,10 @@ export const IMAGE_TYPES = {
   TOKEN: "token",
   PORTRAIT: "portrait"
 };
+
+export const TOKEN_FLAG_KEYS = {
+  ACTIVE_TOKEN_IMAGE_ID: "activeTokenImageId",
+  ACTIVE_PORTRAIT_IMAGE_ID: "activePortraitImageId",
+  ORIGINAL_RING: "originalRing",
+  ORIGINAL_ROTATION: "originalRotation"
+};
