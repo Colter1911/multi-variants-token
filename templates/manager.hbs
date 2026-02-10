@@ -1,0 +1,40 @@
+<section class="mta-layout">
+  <header class="mta-header">
+    <h2>{{title}}</h2>
+  </header>
+
+  <div class="mta-body">
+    <section class="mta-library-zone">
+      <div class="mta-section">
+        <div class="mta-section-header">
+          <h3>{{localize "MTA.TokenSection"}}</h3>
+          <label><input type="checkbox" disabled {{checked global.tokenRandom}} />{{localize "MTA.Random"}}</label>
+          <button type="button" data-action="refresh-random" data-image-type="token">🔄 {{localize "MTA.Refresh"}}</button>
+        </div>
+        <label class="mta-autorotate"><input type="checkbox" disabled {{checked global.autoRotate}} />{{localize "MTA.AutoRotate"}}</label>
+        <div class="mta-grid">
+          {{#each tokenCards}}
+            {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
+          {{/each}}
+        </div>
+      </div>
+
+      <div class="mta-section">
+        <div class="mta-section-header">
+          <h3>{{localize "MTA.PortraitSection"}}</h3>
+          <label><input type="checkbox" disabled {{checked global.portraitRandom}} />{{localize "MTA.Random"}}</label>
+          <button type="button" data-action="refresh-random" data-image-type="portrait">🔄 {{localize "MTA.Refresh"}}</button>
+        </div>
+        <div class="mta-grid">
+          {{#each portraitCards}}
+            {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
+          {{/each}}
+        </div>
+      </div>
+    </section>
+
+    <aside class="mta-settings-placeholder">
+      <p>Select 🖊 on an image to open settings.</p>
+    </aside>
+  </div>
+</section>

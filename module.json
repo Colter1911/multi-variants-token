@@ -1,0 +1,28 @@
+{
+  "id": "multi-tokenart",
+  "title": "Multi Token Art",
+  "description": "Manage multiple token and portrait images with auto-activation, random mode, and Dynamic Ring integration.",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13"
+  },
+  "authors": [
+    {
+      "name": "Author"
+    }
+  ],
+  "esmodules": ["scripts/module.mjs"],
+  "styles": ["styles/multi-tokenart.css"],
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json"
+    }
+  ],
+  "socket": true,
+  "url": "",
+  "manifest": "",
+  "download": ""
+}
