@@ -10,6 +10,7 @@
           <h3>{{localize "MTA.TokenSection"}}</h3>
           <label><input type="checkbox" disabled {{checked global.tokenRandom}} />{{localize "MTA.Random"}}</label>
           <button type="button" data-action="refresh-random" data-image-type="token">🔄 {{localize "MTA.Refresh"}}</button>
+          <button type="button" class="mta-plus-btn" disabled>+</button>
         </div>
         <label class="mta-autorotate"><input type="checkbox" disabled {{checked global.autoRotate}} />{{localize "MTA.AutoRotate"}}</label>
         <div class="mta-grid">
@@ -24,6 +25,7 @@
           <h3>{{localize "MTA.PortraitSection"}}</h3>
           <label><input type="checkbox" disabled {{checked global.portraitRandom}} />{{localize "MTA.Random"}}</label>
           <button type="button" data-action="refresh-random" data-image-type="portrait">🔄 {{localize "MTA.Refresh"}}</button>
+          <button type="button" class="mta-plus-btn" disabled>+</button>
         </div>
         <div class="mta-grid">
           {{#each portraitCards}}

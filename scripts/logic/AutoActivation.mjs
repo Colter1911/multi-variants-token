@@ -1,4 +1,4 @@
-import { MODULE_ID } from "../constants.mjs";
+import { MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
 import { getActorModuleData } from "../utils/flag-utils.mjs";
 import { resolveHpData } from "../utils/hp-resolver.mjs";
 import { applyAutoRotate } from "./AutoRotate.mjs";
@@ -42,7 +42,10 @@ export function selectImageForHp({ images = [], actor, tokenDocument, hp }) {
 
     if (image.autoEnable?.wounded && hp.percent <= Number(image.autoEnable.woundedPercent ?? 50)) {
       wounded.push(image);
-    } else if (image.autoEnable?.die && hp.current <= 0) {
+      continue;
+    }
+
+    if (image.autoEnable?.die && hp.current <= 0) {
       die.push(image);
     }
   }
@@ -51,10 +54,12 @@ export function selectImageForHp({ images = [], actor, tokenDocument, hp }) {
 
   if (wounded.length) {
     wounded.sort((a, b) => Number(a.autoEnable.woundedPercent) - Number(b.autoEnable.woundedPercent));
-    return wounded[0];
+    const bestThreshold = Number(wounded[0].autoEnable.woundedPercent);
+    const tied = wounded.filter((image) => Number(image.autoEnable.woundedPercent) === bestThreshold);
+    return tied[Math.floor(Math.random() * tied.length)];
   }
 
-  if (die.length) return die[0];
+  if (die.length) return die[Math.floor(Math.random() * die.length)];
 
   return images.find((image) => image.isDefault) ?? null;
 }
@@ -76,7 +81,7 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId }) {
   if (!image) return;
 
   await tokenDocument.update({ "texture.src": image.src });
-  await tokenDocument.setFlag(MODULE_ID, "activeTokenImageId", imageId);
+  await tokenDocument.setFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID, imageId);
 
   if (image.dynamicRing?.enabled) {
     await applyDynamicRing({ tokenDocument, ringConfig: image.dynamicRing });
@@ -93,5 +98,5 @@ export async function applyPortraitById({ actor, tokenDocument, imageId }) {
   if (!image) return;
 
   await actor.update({ img: image.src });
-  await tokenDocument.setFlag(MODULE_ID, "activePortraitImageId", imageId);
+  await tokenDocument.setFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID, imageId);
 }

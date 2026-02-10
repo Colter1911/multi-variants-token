@@ -118,3 +118,36 @@
 .multi-tokenart .mta-button-danger:hover {
   background: var(--mta-red);
 }
+
+
+.multi-tokenart h2,
+.multi-tokenart h3 {
+  font-family: "Modesto Condensed", sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.multi-tokenart,
+.multi-tokenart p,
+.multi-tokenart label,
+.multi-tokenart button,
+.multi-tokenart input,
+.multi-tokenart small {
+  font-family: "Signika", sans-serif;
+  font-size: 12px;
+}
+
+.multi-tokenart .mta-plus-btn {
+  background: transparent;
+  border: 1px dashed var(--mta-gold);
+  color: var(--mta-gold);
+  height: 24px;
+  width: 24px;
+}
+
+.multi-tokenart .mta-plus-btn:hover {
+  background: var(--mta-gold);
+  box-shadow: var(--mta-glow);
+  color: #111;
+}
