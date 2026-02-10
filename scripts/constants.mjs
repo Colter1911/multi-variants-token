@@ -1,5 +1,10 @@
 export const MODULE_ID = "multi-tokenart";
 
+export const FLAG_KEYS = {
+  ACTOR_ROOT: MODULE_ID,
+  TOKEN_ROOT: MODULE_ID
+};
+
 export const SETTINGS = {
   HP_CURRENT_PATH: "hpCurrentPath",
   HP_MAX_PATH: "hpMaxPath"

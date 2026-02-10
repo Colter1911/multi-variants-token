@@ -4,6 +4,10 @@ import { registerTokenHudButton } from "./ui/TokenHUD.mjs";
 import { runAutoActivation, applyTokenImageById, applyPortraitById } from "./logic/AutoActivation.mjs";
 import { pickRandomImage } from "./logic/RandomMode.mjs";
 import { getActorModuleData } from "./utils/flag-utils.mjs";
+import { MODULE_ID } from "./constants.mjs";
+import { registerSettings, applySystemPresetIfNeeded } from "./settings.mjs";
+import { registerTokenHudButton } from "./ui/TokenHUD.mjs";
+import { runAutoActivation } from "./logic/AutoActivation.mjs";
 
 Hooks.once("init", () => {
   registerSettings();
@@ -70,4 +74,6 @@ Hooks.on("renderActorSheet", (sheet, html) => {
 
   const portrait = html.querySelector("img.profile, img[data-edit='img']");
   if (portrait) portrait.src = activePortrait.src;
+});
+  void runAutoActivation({ actor, tokenDocument });
 });

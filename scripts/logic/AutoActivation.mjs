@@ -1,4 +1,5 @@
 import { MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
+import { MODULE_ID } from "../constants.mjs";
 import { getActorModuleData } from "../utils/flag-utils.mjs";
 import { resolveHpData } from "../utils/hp-resolver.mjs";
 import { applyAutoRotate } from "./AutoRotate.mjs";
@@ -46,6 +47,7 @@ export function selectImageForHp({ images = [], actor, tokenDocument, hp }) {
     }
 
     if (image.autoEnable?.die && hp.current <= 0) {
+    } else if (image.autoEnable?.die && hp.current <= 0) {
       die.push(image);
     }
   }
@@ -60,6 +62,10 @@ export function selectImageForHp({ images = [], actor, tokenDocument, hp }) {
   }
 
   if (die.length) return die[Math.floor(Math.random() * die.length)];
+    return wounded[0];
+  }
+
+  if (die.length) return die[0];
 
   return images.find((image) => image.isDefault) ?? null;
 }
@@ -82,6 +88,7 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId }) {
 
   await tokenDocument.update({ "texture.src": image.src });
   await tokenDocument.setFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID, imageId);
+  await tokenDocument.setFlag(MODULE_ID, "activeTokenImageId", imageId);
 
   if (image.dynamicRing?.enabled) {
     await applyDynamicRing({ tokenDocument, ringConfig: image.dynamicRing });
@@ -99,4 +106,5 @@ export async function applyPortraitById({ actor, tokenDocument, imageId }) {
 
   await actor.update({ img: image.src });
   await tokenDocument.setFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID, imageId);
+  await tokenDocument.setFlag(MODULE_ID, "activePortraitImageId", imageId);
 }
