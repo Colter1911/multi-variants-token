@@ -20,3 +20,17 @@ These rules were added per user request and should be read at the start of each 
 ## Note
 - Long-term cross-session memory is not guaranteed by the model runtime.
 - This file is the persistent source of truth inside this repository.
+
+## Project Specification (Master Rule)
+- The file `multi-tokenart-spec.md` in the root directory is the **MASTER SPECIFICATION** for this project.
+- All code, features, and strictures must align with `multi-tokenart-spec.md`.
+- 1. General Description
+- 2. Data Architecture
+- 3. Functional Blocks
+- 4. File Structure
+- 5. Hooks
+- 6. Visual Style
+- 7. module.json
+- 8. Edge Cases
+- 9. Phases
+
