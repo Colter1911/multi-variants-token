@@ -1,0 +1,12 @@
+{
+  "MTA.ManagerTitle": "Multi Art: {name}",
+  "MTA.TokenSection": "Token",
+  "MTA.PortraitSection": "Portrait",
+  "MTA.Random": "Random",
+  "MTA.Refresh": "Refresh",
+  "MTA.AutoRotate": "Auto Rotate",
+  "MTA.SettingsPanelTitle": "Settings: {label}",
+  "MTA.TokenHUDButton": "Менеджер портретов",
+  "MTA.Notifications.RandomLocked": "Setting is unavailable while Random mode is enabled.",
+  "MTA.Notifications.MaxImages": "Image limit (100) reached for this section."
+}
