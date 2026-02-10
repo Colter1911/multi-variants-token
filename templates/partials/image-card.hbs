@@ -1,0 +1,6 @@
+<article class="mta-image-card {{#if active}}is-active{{/if}}" data-image-id="{{id}}" data-image-type="{{imageType}}" data-index="{{idx}}" data-action="select-image">
+  <img src="{{src}}" alt="{{imageType}} image {{idx}}" />
+  <button type="button" class="mta-edit-btn" data-action="open-settings" aria-label="Open settings">🖊</button>
+  {{#if active}}<span class="mta-active-dot"></span>{{/if}}
+  {{#if isDefault}}<small class="mta-default-label">default</small>{{/if}}
+</article>

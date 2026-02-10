@@ -1,0 +1,153 @@
+.multi-tokenart {
+  --mta-bg: #111111;
+  --mta-panel: rgba(0, 0, 0, 0.4);
+  --mta-gold: #bd8e34;
+  --mta-cyan: #22d3ee;
+  --mta-red: #ef4444;
+  --mta-glow: 0 0 10px 3px #bd8e34;
+}
+
+.multi-tokenart .mta-layout {
+  background: var(--mta-bg);
+  color: #f5f5f5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  padding: 8px;
+}
+
+.multi-tokenart .mta-body {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 10px;
+}
+
+.multi-tokenart .mta-section,
+.multi-tokenart .mta-settings-placeholder,
+.multi-tokenart .mta-settings-panel {
+  background: var(--mta-panel);
+  border: 1px solid var(--mta-gold);
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.multi-tokenart .mta-section-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.multi-tokenart .mta-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+}
+
+.multi-tokenart .mta-image-card {
+  border: 1px solid var(--mta-gold);
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+}
+
+.multi-tokenart .mta-image-card img {
+  border-radius: 4px;
+  display: block;
+  height: 80px;
+  object-fit: cover;
+  width: 100%;
+}
+
+.multi-tokenart .mta-image-card.is-active {
+  box-shadow: var(--mta-glow);
+}
+
+.multi-tokenart .mta-active-dot {
+  background: #22c55e;
+  border-radius: 50%;
+  height: 10px;
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 10px;
+}
+
+.multi-tokenart .mta-default-label {
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+  text-transform: lowercase;
+}
+
+.multi-tokenart .mta-edit-btn {
+  background: #000;
+  border: 1px solid var(--mta-gold);
+  border-radius: 3px;
+  color: white;
+  position: absolute;
+  right: 4px;
+  top: 4px;
+}
+
+.multi-tokenart .mta-settings-panel.is-disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.multi-tokenart .mta-form-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.multi-tokenart .mta-panel-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.multi-tokenart .mta-button-primary {
+  background: var(--mta-gold);
+  border: 1px solid var(--mta-gold);
+  box-shadow: var(--mta-glow);
+}
+
+.multi-tokenart .mta-button-danger:hover {
+  background: var(--mta-red);
+}
+
+
+.multi-tokenart h2,
+.multi-tokenart h3 {
+  font-family: "Modesto Condensed", sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.multi-tokenart,
+.multi-tokenart p,
+.multi-tokenart label,
+.multi-tokenart button,
+.multi-tokenart input,
+.multi-tokenart small {
+  font-family: "Signika", sans-serif;
+  font-size: 12px;
+}
+
+.multi-tokenart .mta-plus-btn {
+  background: transparent;
+  border: 1px dashed var(--mta-gold);
+  color: var(--mta-gold);
+  height: 24px;
+  width: 24px;
+}
+
+.multi-tokenart .mta-plus-btn:hover {
+  background: var(--mta-gold);
+  box-shadow: var(--mta-glow);
+  color: #111;
+}
