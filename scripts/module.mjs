@@ -28,10 +28,15 @@ function setModuleApi() {
   };
 }
 
-Hooks.once("init", () => {
+Hooks.once("init", async () => {
   registerSettings();
   registerTokenHudButton();
   setModuleApi();
+
+  await loadTemplates([
+    "modules/multi-tokenart/templates/partials/image-card.hbs",
+    "modules/multi-tokenart/templates/settings-panel.hbs"
+  ]);
 });
 
 Hooks.once("ready", () => {

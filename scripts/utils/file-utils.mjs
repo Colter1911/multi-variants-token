@@ -29,6 +29,13 @@ export async function ensureActorDirectory(actor) {
   return target;
 }
 
-export function buildManagedPath(actor, filename) {
-  return `${MODULE_ID}/${sanitizeActorFolder(actor)}/${filename}`;
+export async function uploadFileToActorFolder(file, actor) {
+  const folder = await ensureActorDirectory(actor);
+  try {
+    const result = await FilePicker.upload("data", folder, file);
+    return result.path;
+  } catch (error) {
+    ui.notifications.error(`Upload failed: ${error.message}`);
+    return null;
+  }
 }

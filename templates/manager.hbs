@@ -5,38 +5,48 @@
 
   <div class="mta-body">
     <section class="mta-library-zone">
-      <div class="mta-section">
+      <div class="mta-section" data-image-type="token">
         <div class="mta-section-header">
           <h3>{{localize "MTA.TokenSection"}}</h3>
-          <label><input type="checkbox" disabled {{checked global.tokenRandom}} />{{localize "MTA.Random"}}</label>
-          <button type="button" data-action="refresh-random" data-image-type="token">🔄 {{localize "MTA.Refresh"}}</button>
-          <button type="button" class="mta-plus-btn" disabled>+</button>
+          <label><input type="checkbox" name="tokenRandom" data-action="toggle-global" {{checked
+              global.tokenRandom}} />{{localize "MTA.Random"}}</label>
+          <button type="button" data-action="refresh-random" data-image-type="token">🔄 {{localize
+            "MTA.Refresh"}}</button>
+          <button type="button" class="mta-plus-btn" data-action="add-image" data-image-type="token">+</button>
         </div>
-        <label class="mta-autorotate"><input type="checkbox" disabled {{checked global.autoRotate}} />{{localize "MTA.AutoRotate"}}</label>
+        <label class="mta-autorotate"><input type="checkbox" name="autoRotate" data-action="toggle-global" {{checked
+            global.autoRotate}} />{{localize
+          "MTA.AutoRotate"}}</label>
         <div class="mta-grid">
           {{#each tokenCards}}
-            {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
+          {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
           {{/each}}
         </div>
       </div>
 
-      <div class="mta-section">
+      <div class="mta-section" data-image-type="portrait">
         <div class="mta-section-header">
           <h3>{{localize "MTA.PortraitSection"}}</h3>
-          <label><input type="checkbox" disabled {{checked global.portraitRandom}} />{{localize "MTA.Random"}}</label>
-          <button type="button" data-action="refresh-random" data-image-type="portrait">🔄 {{localize "MTA.Refresh"}}</button>
-          <button type="button" class="mta-plus-btn" disabled>+</button>
+          <label><input type="checkbox" name="portraitRandom" data-action="toggle-global" {{checked
+              global.portraitRandom}} />{{localize "MTA.Random"}}</label>
+          <button type="button" data-action="refresh-random" data-image-type="portrait">🔄 {{localize
+            "MTA.Refresh"}}</button>
+          <button type="button" class="mta-plus-btn" data-action="add-image" data-image-type="portrait">+</button>
         </div>
         <div class="mta-grid">
           {{#each portraitCards}}
-            {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
+          {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
           {{/each}}
         </div>
       </div>
     </section>
 
+    {{#if activeSettings}}
+    {{> "modules/multi-tokenart/templates/settings-panel.hbs" activeSettings}}
+    {{else}}
     <aside class="mta-settings-placeholder">
       <p>Select 🖊 on an image to open settings.</p>
     </aside>
+    {{/if}}
   </div>
 </section>

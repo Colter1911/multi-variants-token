@@ -40,7 +40,7 @@ export function selectImageForHp({ images = [], actor, tokenDocument, hp }) {
       if (isMatch) scripted.push(image);
     }
 
-    if (image.autoEnable?.wounded && hp.percent <= Number(image.autoEnable.woundedPercent ?? 50)) {
+    if (image.autoEnable?.wounded && hp.percent <= Number(image.autoEnable.woundedPercent ?? 50) && hp.current > 0) {
       wounded.push(image);
       continue;
     }
