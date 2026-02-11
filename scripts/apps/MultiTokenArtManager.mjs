@@ -3,6 +3,7 @@ import { getActorModuleData, setActorModuleData } from "../utils/flag-utils.mjs"
 import { uploadFileToActorFolder } from "../utils/file-utils.mjs";
 import { pickRandomImage, sortImagesByOrder } from "../logic/RandomMode.mjs";
 import { applyTokenImageById, applyPortraitById } from "../logic/AutoActivation.mjs";
+import { AutoTokenService } from "../logic/AutoTokenService.mjs";
 import { SettingsPanel } from "./SettingsPanel.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
@@ -51,7 +52,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         isDefault: true,
         autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false },
         customScript: "",
-        dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#000000", backgroundColor: "#000000" }
+        dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#ffffff", backgroundColor: "#000000" }
       }];
       changed = true;
     }
@@ -66,7 +67,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         isDefault: true,
         autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false },
         customScript: "",
-        dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#000000", backgroundColor: "#000000" } // Dynamic Ring irrelevant for portrait, but keeping schema consistent is easier
+        dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#ffffff", backgroundColor: "#000000" } // Dynamic Ring irrelevant for portrait, but keeping schema consistent is easier
       }];
       changed = true;
     }
@@ -156,6 +157,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           else if (action === "delete-image") await this.#onDeleteImage(event);
           else if (action === "save-settings") await this.#onSaveSettings(event);
           else if (action === "browse-file") await this.#onBrowseFile(event);
+          else if (action === "create-token") await this.#onCreateToken(event);
         }
       });
     });
@@ -281,7 +283,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       dynamicRing: {
         enabled: false,
         scaleCorrection: 1,
-        ringColor: "#000000",
+        ringColor: "#ffffff",
         backgroundColor: "#000000"
       }
     };
@@ -471,5 +473,95 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     await setActorModuleData(this.actor, data);
     this.render();
+  }
+
+  async #onCreateToken(event) {
+    if (!this.activeSettings) return;
+
+    const { index, imageType } = this.activeSettings;
+    if (imageType !== IMAGE_TYPES.TOKEN) {
+      ui.notifications.warn("Create Token доступен только для Token-изображений.");
+      return;
+    }
+
+    const data = getActorModuleData(this.actor);
+    const list = data.tokenImages;
+    const image = list[index];
+    if (!image) return;
+
+    // Получаем src из панели (может быть изменён пользователем, но ещё не сохранён)
+    const panel = this.element.querySelector(".mta-settings-panel");
+    const srcInput = panel?.querySelector("[name='src']");
+    const src = srcInput?.value || image.src;
+
+    if (!src || src === "icons/svg/mystery-man.svg") {
+      ui.notifications.warn("Сначала задайте изображение для обработки.");
+      return;
+    }
+
+    ui.notifications.info("🎭 Создание токена... Подождите.");
+
+    try {
+      const service = AutoTokenService.instance();
+      const { blob, faceCoordinates } = await service.createTokenBlob(src, 2.5);
+
+      if (!blob) {
+        ui.notifications.error("Не удалось создать токен.");
+        return;
+      }
+
+      // Формируем безопасное имя файла
+      let rawBaseName = src.split("/").pop()?.replace(/\.[^.]+$/, "") || "token";
+      try {
+        rawBaseName = decodeURIComponent(rawBaseName);
+      } catch (e) {
+        // Игнорируем ошибки декодирования
+      }
+
+      // Slugify для безопасности (удаляет спецсимволы, пробелы и т.д.)
+      const baseName = rawBaseName.slugify({ strict: true }) || "token";
+      const fileName = `${baseName}_token.webp`;
+      const file = new File([blob], fileName, { type: "image/webp" });
+
+      // Загружаем в папку актора
+      const uploadedPath = await uploadFileToActorFolder(file, this.actor);
+      if (!uploadedPath) {
+        ui.notifications.error("Ошибка загрузки файла токена.");
+        return;
+      }
+
+      // Обновляем данные изображения
+      image.src = uploadedPath;
+      image.dynamicRing = {
+        enabled: true,
+        scaleCorrection: 0.8,
+        ringColor: "#ffffff",
+        backgroundColor: "#000000"
+      };
+
+      await setActorModuleData(this.actor, data);
+
+      // Применяем изображение к токену
+      await applyTokenImageById({ actor: this.actor, tokenDocument: this.tokenDocument, imageId: image.id });
+
+      // Принудительное обновление текстуры на canvas (если нужно)
+      const token = this.tokenDocument?.object;
+      if (token) {
+        token.renderFlags.set({ refreshMesh: true });
+        token.draw();
+      }
+
+      console.log("[MTA AutoToken] Токен создан:", {
+        path: uploadedPath,
+        faceCoordinates,
+        dynamicRing: image.dynamicRing
+      });
+
+      ui.notifications.info(`✅ Токен создан: ${fileName}`);
+      this.render();
+    } catch (err) {
+      console.error("[MTA AutoToken] Ошибка:", err);
+      ui.notifications.error(`Ошибка создания токена: ${err.message}`);
+    }
   }
 }

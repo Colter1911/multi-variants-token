@@ -20,7 +20,7 @@ export class ImageData extends foundry.abstract.DataModel {
       dynamicRing: new fields.SchemaField({
         enabled: new fields.BooleanField({ required: true, initial: false }),
         scaleCorrection: new fields.NumberField({ required: true, initial: 1 }),
-        ringColor: new fields.ColorField({ required: true, initial: "#000000" }),
+        ringColor: new fields.ColorField({ required: true, initial: "#ffffff" }),
         backgroundColor: new fields.ColorField({ required: true, initial: "#000000" })
       })
     };

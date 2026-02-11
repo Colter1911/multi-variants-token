@@ -12,6 +12,7 @@
       "name": "Author"
     }
   ],
+  "scripts": ["scripts/lib/face-api.min.js"],
   "esmodules": ["scripts/module.mjs"],
   "styles": ["styles/multi-tokenart.css"],
   "languages": [

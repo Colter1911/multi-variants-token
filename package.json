@@ -1,0 +1,24 @@
+{
+  "name": "multi-tokenart",
+  "version": "1.0.0",
+  "description": "Foundry VTT v13 module scaffold for managing multiple token and portrait images.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Colter1911/multi-variants-token.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Colter1911/multi-variants-token/issues"
+  },
+  "homepage": "https://github.com/Colter1911/multi-variants-token#readme",
+  "dependencies": {
+    "face-api.js": "^0.22.2"
+  }
+}

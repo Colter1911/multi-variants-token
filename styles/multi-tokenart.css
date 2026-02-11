@@ -482,3 +482,35 @@
   box-shadow: inset 0 0 30px rgba(34, 211, 238, 0.2);
   transition: all 0.2s ease;
 }
+
+/* Create Token Button */
+.multi-tokenart .mta-create-token-btn {
+  width: 100%;
+  padding: 8px 12px;
+  margin-top: 4px;
+  border: 1px solid var(--mta-cyan);
+  color: var(--mta-cyan);
+  background: rgba(34, 211, 238, 0.1);
+  border-radius: 4px;
+  font-family: "Signika", sans-serif;
+  font-weight: 600;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.multi-tokenart .mta-create-token-btn:hover:not(:disabled) {
+  background: var(--mta-cyan);
+  color: #000;
+  box-shadow: 0 0 15px rgba(34, 211, 238, 0.5);
+}
+
+.multi-tokenart .mta-create-token-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
