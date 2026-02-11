@@ -160,6 +160,95 @@
   box-shadow: 0 0 5px var(--mta-green);
 }
 
+.multi-tokenart .mta-card-clickable {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.multi-tokenart .mta-card-clickable img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.multi-tokenart .mta-default-label {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--mta-yellow);
+  padding: 2px 6px;
+  font-size: 9px;
+  border-radius: 3px;
+  pointer-events: none;
+  max-width: calc(100% - 28px);
+  /* Оставляем место для кнопки удаления */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-tokenart .mta-delete-btn {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--mta-red);
+  border: 1px solid var(--mta-red);
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  transition: all 0.2s;
+  opacity: 0;
+}
+
+.multi-tokenart .mta-image-card:hover .mta-delete-btn {
+  opacity: 1;
+}
+
+.multi-tokenart .mta-delete-btn:hover {
+  background: var(--mta-red);
+  color: #fff;
+}
+
+.multi-tokenart .mta-add-placeholder {
+  border-style: dashed;
+  border-color: rgba(189, 142, 52, 0.4);
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.multi-tokenart .mta-add-placeholder:hover {
+  border-color: var(--mta-gold);
+  background: rgba(189, 142, 52, 0.1);
+}
+
+.multi-tokenart .mta-add-placeholder-btn {
+  font-size: 36px;
+  font-weight: 300;
+  color: var(--mta-gold);
+  background: none;
+  border: none;
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+
 /* Settings Panel (Sidebar) */
 .multi-tokenart .mta-settings-placeholder {
   width: 300px;
@@ -182,6 +271,24 @@
   flex-direction: column;
   gap: 12px;
   box-shadow: -5px 0 20px rgba(0, 0, 0, 0.5);
+  transition: box-shadow 0.3s ease;
+}
+
+/* Glow эффект при смене settings */
+@keyframes settingsGlow {
+
+  0%,
+  100% {
+    box-shadow: -5px 0 20px rgba(0, 0, 0, 0.5);
+  }
+
+  50% {
+    box-shadow: 0 0 25px rgba(0, 123, 255, 0.9), inset 0 0 15px rgba(0, 123, 255, 0.4);
+  }
+}
+
+.multi-tokenart .mta-settings-glow {
+  animation: settingsGlow 0.6s ease-out;
 }
 
 .multi-tokenart .mta-settings-panel h3 {
@@ -205,27 +312,44 @@
   gap: 8px;
   color: var(--mta-text);
   font-size: 13px;
-  justify-content: space-between;
 }
 
 .multi-tokenart .mta-settings-panel label {
+  justify-content: space-between;
   white-space: nowrap;
 }
 
-.multi-tokenart .mta-settings-panel input[type="checkbox"] {
-  margin: 0;
+.multi-tokenart .mta-settings-panel .label-text {
+  flex-shrink: 0;
+  text-align: left;
 }
 
-.multi-tokenart .mta-settings-panel input[type="number"] {
-  width: 50px;
-  text-align: center;
-}
-
-.multi-tokenart .mta-settings-panel input[type="range"] {
+.multi-tokenart .mta-settings-panel .label-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1;
-  margin: 0 8px;
   min-width: 0;
 }
+
+.multi-tokenart .mta-settings-panel .label-file {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.multi-tokenart .mta-settings-panel .label-file .label-text {
+  text-align: left;
+}
+
+.multi-tokenart .mta-settings-panel .range-value {
+  min-width: 30px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--mta-gold);
+}
+
+
 
 /* Form Inputs */
 .multi-tokenart input[type="text"],
@@ -315,6 +439,16 @@
   box-shadow: 0 0 10px var(--mta-red);
 }
 
+.multi-tokenart .mta-panel-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.multi-tokenart .mta-panel-actions button {
+  flex: 1;
+}
+
 /* Scrollbar */
 .multi-tokenart ::-webkit-scrollbar {
   width: 6px;
@@ -339,4 +473,12 @@
   opacity: 0.6;
   pointer-events: none;
   filter: grayscale(0.5);
+}
+
+/* Drag & Drop */
+.multi-tokenart .mta-section.mta-drop-zone-active {
+  border-color: var(--mta-cyan);
+  background: rgba(34, 211, 238, 0.1);
+  box-shadow: inset 0 0 30px rgba(34, 211, 238, 0.2);
+  transition: all 0.2s ease;
 }

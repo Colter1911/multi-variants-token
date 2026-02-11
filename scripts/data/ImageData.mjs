@@ -11,6 +11,7 @@ export class ImageData extends foundry.abstract.DataModel {
       sort: new fields.NumberField({ required: true, integer: true, initial: 0 }),
       isDefault: new fields.BooleanField({ required: true, initial: false }),
       autoEnable: new fields.SchemaField({
+        enabled: new fields.BooleanField({ required: true, initial: false }),
         wounded: new fields.BooleanField({ required: true, initial: false }),
         woundedPercent: new fields.NumberField({ required: true, integer: true, min: 1, max: 99, initial: 50 }),
         die: new fields.BooleanField({ required: true, initial: false })

@@ -49,7 +49,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         src: defaultSrc,
         sort: 0,
         isDefault: true,
-        autoEnable: { wounded: false, woundedPercent: 50, die: false },
+        autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false },
         customScript: "",
         dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#000000", backgroundColor: "#000000" }
       }];
@@ -64,7 +64,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         src: defaultSrc,
         sort: 0,
         isDefault: true,
-        autoEnable: { wounded: false, woundedPercent: 50, die: false },
+        autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false },
         customScript: "",
         dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#000000", backgroundColor: "#000000" } // Dynamic Ring irrelevant for portrait, but keeping schema consistent is easier
       }];
@@ -78,6 +78,20 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     const tokenImages = sortImagesByOrder(data.tokenImages ?? []);
     const portraitImages = sortImagesByOrder(data.portraitImages ?? []);
+
+    // Нормализация: добавляем autoEnable.enabled если не задано (для обратной совместимости)
+    const normalizeImage = (image) => {
+      if (!image.autoEnable) {
+        image.autoEnable = { enabled: false, wounded: false, woundedPercent: 50, die: false };
+      } else if (image.autoEnable.enabled === undefined) {
+        image.autoEnable.enabled = false;
+      }
+      return image;
+    };
+
+    tokenImages.forEach(normalizeImage);
+    portraitImages.forEach(normalizeImage);
+
     const activeTokenImageId = this.tokenDocument?.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
     const activePortraitImageId = this.tokenDocument?.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
 
@@ -128,50 +142,88 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
   async _onRender(context, options) {
     await super._onRender(context, options);
 
-    this.element.querySelectorAll("[data-action='select-image']")
-      .forEach((el) => el.addEventListener("click", (event) => this.#onSelectImage(event)));
+    // Handle multiple actions on one element (e.g. "select-image open-settings")
+    this.element.querySelectorAll("[data-action]").forEach((el) => {
+      const actions = el.dataset.action.split(" ");
+      el.addEventListener("click", async (event) => {
+        for (const action of actions) {
+          if (action === "select-image") await this.#onSelectImage(event);
+          else if (action === "open-settings") await this.#onOpenSettings(event);
+          else if (action === "delete-from-card") await this.#onDeleteFromCard(event);
+          else if (action === "refresh-random") await this.#onRefreshRandom(event);
+          else if (action === "add-image") await this.#onAddImage(event);
+          else if (action === "toggle-global") await this.#onToggleGlobal(event);
+          else if (action === "delete-image") await this.#onDeleteImage(event);
+          else if (action === "save-settings") await this.#onSaveSettings(event);
+          else if (action === "browse-file") await this.#onBrowseFile(event);
+        }
+      });
+    });
 
-    this.element.querySelectorAll("[data-action='open-settings']")
-      .forEach((el) => el.addEventListener("click", (event) => this.#onOpenSettings(event)));
-
-    this.element.querySelectorAll("[data-action='refresh-random']")
-      .forEach((el) => el.addEventListener("click", (event) => this.#onRefreshRandom(event)));
-
-    this.element.querySelectorAll("[data-action='add-image']")
-      .forEach((el) => el.addEventListener("click", (event) => this.#onAddImage(event)));
-
-    this.element.querySelectorAll("[data-action='toggle-global']")
-      .forEach((el) => el.addEventListener("change", (event) => this.#onToggleGlobal(event)));
+    // ПКМ на картинке открывает settings
+    this.element.querySelectorAll(".mta-image-card").forEach((card) => {
+      card.addEventListener("contextmenu", async (event) => {
+        event.preventDefault();
+        await this.#onOpenSettings(event);
+      });
+    });
 
     // Settings Panel Actions
     const settingsPanel = this.element.querySelector(".mta-settings-panel");
     if (settingsPanel) {
-      settingsPanel.querySelector("[data-action='save-settings']")
-        ?.addEventListener("click", (event) => this.#onSaveSettings(event));
+      // AutoEnable toggle handler - динамически включает/выключает Wounded и Die поля
+      const autoEnableCheckbox = settingsPanel.querySelector("[name='autoEnable.enabled']");
+      if (autoEnableCheckbox) {
+        autoEnableCheckbox.addEventListener("change", (e) => {
+          const enabled = e.target.checked;
+          const woundedCheckbox = settingsPanel.querySelector("[name='autoEnable.wounded']");
+          const woundedPercent = settingsPanel.querySelector("[name='autoEnable.woundedPercent']");
+          const dieCheckbox = settingsPanel.querySelector("[name='autoEnable.die']");
 
-      settingsPanel.querySelector("[data-action='delete-image']")
-        ?.addEventListener("click", (event) => this.#onDeleteImage(event));
-
-      settingsPanel.querySelector("[data-action='browse-file']")
-        ?.addEventListener("click", (event) => this.#onBrowseFile(event));
+          if (woundedCheckbox) woundedCheckbox.disabled = !enabled;
+          if (woundedPercent) woundedPercent.disabled = !enabled;
+          if (dieCheckbox) dieCheckbox.disabled = !enabled;
+        });
+      }
 
       settingsPanel.querySelectorAll("input[type='range']").forEach(input => {
         input.addEventListener("input", (e) => {
-          const span = e.target.nextElementSibling;
-          if (span) span.textContent = e.target.value;
+          const valueSpan = e.target.parentElement.querySelector(".range-value");
+          if (valueSpan) valueSpan.textContent = e.target.value;
         });
       });
     }
 
+    // Drag & Drop Visualization
+    const sections = this.element.querySelectorAll(".mta-section[data-image-type]");
+    sections.forEach(section => {
+      section.addEventListener("dragenter", (e) => {
+        e.preventDefault();
+        section.classList.add("mta-drop-zone-active");
+      });
+
+      section.addEventListener("dragleave", (e) => {
+        if (e.target === section) {
+          section.classList.remove("mta-drop-zone-active");
+        }
+      });
+
+      section.addEventListener("drop", (e) => {
+        section.classList.remove("mta-drop-zone-active");
+      });
+    });
+
     this.element.addEventListener("dragover", (event) => event.preventDefault());
     this.element.addEventListener("drop", (event) => this.#onDrop(event));
   }
-
   async #onDrop(event) {
     event.preventDefault();
 
     const section = event.target.closest("[data-image-type]");
     const imageType = section?.dataset.imageType || IMAGE_TYPES.TOKEN;
+
+    // Remove drop zone highlight
+    section?.classList.remove("mta-drop-zone-active");
 
     // 1. Handle OS Files
     if (event.dataTransfer.files.length > 0) {
@@ -220,6 +272,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       sort: list.length,
       isDefault: list.length === 0,
       autoEnable: {
+        enabled: false,
         wounded: false,
         woundedPercent: 50,
         die: false
@@ -268,6 +321,44 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const index = Number(card.dataset.index ?? 0);
 
     this.activeSettings = { index, imageType };
+    await this.render();
+
+    // Добавляем glow эффект к settings panel
+    const settingsPanel = this.element.querySelector(".mta-settings-panel");
+    if (settingsPanel) {
+      settingsPanel.classList.add("mta-settings-glow");
+      setTimeout(() => {
+        settingsPanel.classList.remove("mta-settings-glow");
+      }, 600);
+    }
+  }
+
+  async #onDeleteFromCard(event) {
+    event.stopPropagation();
+    const card = event.currentTarget.closest("[data-image-id]");
+    if (!card) return;
+
+    const imageType = card.dataset.imageType;
+    const index = Number(card.dataset.index ?? 0);
+
+    const confirm = await Dialog.confirm({
+      title: "Delete Image?",
+      content: "<p>Are you sure you want to delete this image configuration?</p>",
+      defaultYes: false
+    });
+
+    if (!confirm) return;
+
+    const data = getActorModuleData(this.actor);
+    const list = imageType === IMAGE_TYPES.TOKEN ? data.tokenImages : data.portraitImages;
+
+    list.splice(index, 1);
+    await setActorModuleData(this.actor, data);
+
+    if (this.activeSettings?.index === index && this.activeSettings?.imageType === imageType) {
+      this.activeSettings = null;
+    }
+
     this.render();
   }
 
@@ -284,10 +375,13 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const isDefault = panel.querySelector("[name='isDefault']").checked;
 
     const autoEnable = {
-      wounded: panel.querySelector("[name='autoEnable.wounded']").checked,
-      woundedPercent: Number(panel.querySelector("[name='autoEnable.woundedPercent']").value),
-      die: panel.querySelector("[name='autoEnable.die']").checked
+      enabled: panel.querySelector("[name='autoEnable.enabled']")?.checked || false,
+      wounded: panel.querySelector("[name='autoEnable.wounded']")?.checked || false,
+      woundedPercent: Number(panel.querySelector("[name='autoEnable.woundedPercent']")?.value || 50),
+      die: panel.querySelector("[name='autoEnable.die']")?.checked || false
     };
+
+    console.log("[MTA] Saving autoEnable:", autoEnable);
 
     const image = list[index];
     image.src = src;

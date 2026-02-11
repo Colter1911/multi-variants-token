@@ -5,6 +5,8 @@ import { runAutoActivation, applyTokenImageById, applyPortraitById } from "./log
 import { pickRandomImage } from "./logic/RandomMode.mjs";
 import { getActorModuleData } from "./utils/flag-utils.mjs";
 
+console.log("✅ Multi Token Art | module.mjs loaded");
+
 function openManagerForControlledToken() {
   const controlled = canvas?.tokens?.controlled?.[0]?.document ?? null;
   if (!controlled) {
@@ -51,15 +53,29 @@ Hooks.once("ready", () => {
 });
 
 Hooks.on("updateActor", (actor, changes) => {
-  const hpChanged = foundry.utils.hasProperty(changes, "system");
-  if (!hpChanged) return;
+  console.log("[MTA] updateActor hook fired", { actorName: actor.name, changes });
+  // Проверяем что изменились именно HP (более точная проверка чем просто "system")
+  const hpChanged = foundry.utils.hasProperty(changes, "system.attributes.hp") ||
+    foundry.utils.hasProperty(changes, "system.attributes.hp.value") ||
+    foundry.utils.hasProperty(changes, "system");
+  if (!hpChanged) {
+    console.log("[MTA] HP not changed, skipping");
+    return;
+  }
 
-  for (const tokenDocument of actor.getActiveTokens(true)) {
-    void runAutoActivation({ actor, tokenDocument });
+  console.log("[MTA] HP changed detected, running auto-activation");
+  // ВАЖНО: getActiveTokens(true) возвращает Token objects, нужны TokenDocuments
+  for (const token of actor.getActiveTokens(true)) {
+    const tokenDocument = token.document;
+    console.log("[MTA] Processing token", { tokenName: token.name, hasDocument: !!tokenDocument });
+    if (tokenDocument) {
+      void runAutoActivation({ actor, tokenDocument });
+    }
   }
 });
 
 Hooks.on("updateToken", (tokenDocument, changes) => {
+  console.log("[MTA] updateToken hook fired", { tokenName: tokenDocument.name, changes });
   const hpLikeChanged = foundry.utils.hasProperty(changes, "delta") || foundry.utils.hasProperty(changes, "actorData");
   if (!hpLikeChanged) return;
 
@@ -70,6 +86,7 @@ Hooks.on("updateToken", (tokenDocument, changes) => {
 });
 
 Hooks.on("createToken", (tokenDocument) => {
+  console.log("[MTA] createToken hook fired", { tokenName: tokenDocument.name });
   const actor = tokenDocument.actor;
   if (!actor) return;
 

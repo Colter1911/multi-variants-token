@@ -21,6 +21,9 @@
           {{#each tokenCards}}
           {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
           {{/each}}
+          <article class="mta-image-card mta-add-placeholder" data-action="add-image" data-image-type="token">
+            <button type="button" class="mta-add-placeholder-btn">+</button>
+          </article>
         </div>
       </div>
 
@@ -37,6 +40,9 @@
           {{#each portraitCards}}
           {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
           {{/each}}
+          <article class="mta-image-card mta-add-placeholder" data-action="add-image" data-image-type="portrait">
+            <button type="button" class="mta-add-placeholder-btn">+</button>
+          </article>
         </div>
       </div>
     </section>

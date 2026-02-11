@@ -37,6 +37,20 @@ export async function setTokenFlag(tokenDocument, key, value) {
 }
 
 export function getTokenFlag(tokenDocument, key, fallback = null) {
+  if (!tokenDocument) {
+    console.warn("[MTA] getTokenFlag: tokenDocument is null/undefined");
+    return fallback;
+  }
+
+  if (typeof tokenDocument.getFlag !== 'function') {
+    console.error("[MTA] getTokenFlag: tokenDocument.getFlag is not a function", {
+      tokenDocument,
+      type: typeof tokenDocument,
+      constructor: tokenDocument?.constructor?.name
+    });
+    return fallback;
+  }
+
   return tokenDocument.getFlag(MODULE_ID, key) ?? fallback;
 }
 
