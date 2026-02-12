@@ -1,4 +1,5 @@
 export const MODULE_ID = "multi-tokenart";
+export const DEBUG_VERSION = "v0.4.19";
 
 export const SETTINGS = {
   HP_CURRENT_PATH: "hpCurrentPath",

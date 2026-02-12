@@ -1,16 +1,41 @@
 .multi-tokenart {
+  /* Colors */
   --mta-bg: #111111;
   --mta-panel: rgba(0, 0, 0, 0.4);
-  --mta-gold: #bd8e34;
+  --mta-header-bg: rgba(255, 255, 255, 0.05);
+
+  /* Accents */
+  --mta-accent: #ff6400;
+  /* Main Orange */
   --mta-cyan: #22d3ee;
-  --mta-red: #ef4444;
-  --mta-green: #22c55e;
-  --mta-text: #f5f5f5;
-  --mta-text-dim: #a3a3a3;
-  --mta-border: 1px solid var(--mta-gold);
-  --mta-glow: 0 0 10px 2px rgba(189, 142, 52, 0.3);
-  --mta-glow-active: 0 0 12px 4px rgba(189, 142, 52, 0.5);
-  font-family: "Signika", sans-serif;
+  --mta-success: #366f2c;
+  --mta-warning: #e76f00;
+  --mta-danger: #8b0000;
+
+  /* Text */
+  --mta-text-header: #f0f0e0;
+  --mta-text: #cec4b0;
+  --mta-text-muted: #7a7971;
+
+  /* Borders */
+  --mta-border-gold: #9f9275;
+  --mta-border-light: #c9c7b8;
+  --mta-border-dark: #000000;
+  --mta-border-radius: 4px;
+  --mta-border-radius-sm: 2px;
+
+  /* Effects */
+  --mta-glow-gold: 0 0 5px rgba(255, 165, 0, 0.5);
+  --mta-text-glow-cyan: 0 0 5px rgba(22, 211, 238, 0.8), 0 0 10px rgba(34, 211, 238, 0.5);
+  --mta-shadow-panel: 0 0 10px #000;
+  --mta-shadow-mixer: inset 0 0 0 1px rgba(0, 0, 0, 0.8), 0 2px 4px rgba(0, 0, 0, 0.5);
+  --mta-box-shadow-glow: 0 0 10px 2px rgba(159, 146, 117, 0.3);
+
+  /* Typography */
+  --mta-font-header: "Modesto Condensed", "Signika", sans-serif;
+  --mta-font-body: "Signika", "Roboto", sans-serif;
+
+  font-family: var(--mta-font-body);
   font-size: 13px;
   color: var(--mta-text);
 }
@@ -30,10 +55,19 @@
   gap: 12px;
 }
 
+.multi-tokenart .mta-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 2px solid var(--mta-border-gold);
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+}
+
 .multi-tokenart .mta-header h2 {
   border: none;
-  color: var(--mta-gold);
-  font-family: "Modesto Condensed", serif;
+  color: var(--mta-text-header);
+  font-family: var(--mta-font-header);
   font-size: 24px;
   font-weight: 700;
   text-transform: uppercase;
@@ -62,10 +96,10 @@
 /* Sections */
 .multi-tokenart .mta-section {
   background: var(--mta-panel);
-  border: 1px solid rgba(189, 142, 52, 0.3);
-  border-radius: 6px;
+  border: 1px solid var(--mta-border-gold);
+  border-radius: var(--mta-border-radius);
   padding: 10px;
-  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--mta-shadow-panel);
 }
 
 .multi-tokenart .mta-section-header {
@@ -73,15 +107,31 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
-  border-bottom: 1px solid rgba(189, 142, 52, 0.2);
+  border-bottom: 1px solid var(--mta-border-gold);
   padding-bottom: 6px;
+  background: var(--mta-header-bg);
+  padding: 4px 8px;
+  margin: -10px -10px 10px -10px;
+  border-radius: var(--mta-border-radius) var(--mta-border-radius) 0 0;
+  gap: 12px;
+}
+
+.multi-tokenart .mta-section-header .mta-control-group {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.multi-tokenart .mta-section-header .mta-autorotate {
+  margin-left: 12px;
 }
 
 .multi-tokenart h3 {
   border: none;
-  font-family: "Modesto Condensed", serif;
+  font-family: var(--mta-font-header);
   font-size: 18px;
-  color: var(--mta-gold);
+  color: var(--mta-text-header);
   margin: 0;
 }
 
@@ -94,8 +144,8 @@
 
 .multi-tokenart .mta-image-card {
   position: relative;
-  border: 1px solid rgba(189, 142, 52, 0.4);
-  border-radius: 4px;
+  border: 1px solid var(--mta-border-gold);
+  border-radius: var(--mta-border-radius);
   background: #000;
   aspect-ratio: 1;
   cursor: pointer;
@@ -104,14 +154,21 @@
 }
 
 .multi-tokenart .mta-image-card:hover {
-  border-color: var(--mta-gold);
-  box-shadow: 0 0 8px rgba(189, 142, 52, 0.4);
+  border-color: var(--mta-accent);
+  box-shadow: var(--mta-glow-gold);
   transform: translateY(-1px);
 }
 
 .multi-tokenart .mta-image-card.is-active {
-  border-color: var(--mta-gold);
-  box-shadow: var(--mta-glow-active);
+  border-color: var(--mta-accent);
+  box-shadow: 0 0 12px 4px rgba(255, 100, 0, 0.5);
+  z-index: 5;
+}
+
+.multi-tokenart .mta-image-card.is-editing {
+  border-color: var(--mta-cyan) !important;
+  box-shadow: 0 0 10px 2px rgba(34, 211, 238, 0.5) !important;
+  z-index: 10;
 }
 
 .multi-tokenart .mta-image-card img {
@@ -127,11 +184,11 @@
   top: 4px;
   right: 4px;
   background: rgba(0, 0, 0, 0.7);
-  color: var(--mta-gold);
-  border: 1px solid var(--mta-gold);
+  color: var(--mta-border-gold);
+  border: 1px solid var(--mta-border-gold);
   width: 20px;
   height: 20px;
-  border-radius: 4px;
+  border-radius: var(--mta-border-radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -145,8 +202,9 @@
 }
 
 .multi-tokenart .mta-edit-btn:hover {
-  background: var(--mta-gold);
+  background: var(--mta-accent);
   color: #000;
+  border-color: var(--mta-accent);
 }
 
 .multi-tokenart .mta-active-dot {
@@ -155,9 +213,9 @@
   left: 6px;
   width: 8px;
   height: 8px;
-  background: var(--mta-green);
+  background: var(--mta-accent);
   border-radius: 50%;
-  box-shadow: 0 0 5px var(--mta-green);
+  box-shadow: 0 0 5px var(--mta-accent);
 }
 
 .multi-tokenart .mta-card-clickable {
@@ -181,7 +239,7 @@
   bottom: 4px;
   left: 4px;
   background: rgba(0, 0, 0, 0.7);
-  color: var(--mta-yellow);
+  color: var(--mta-accent);
   padding: 2px 6px;
   font-size: 9px;
   border-radius: 3px;
@@ -198,11 +256,11 @@
   bottom: 4px;
   right: 4px;
   background: rgba(0, 0, 0, 0.7);
-  color: var(--mta-red);
-  border: 1px solid var(--mta-red);
+  color: var(--mta-danger);
+  border: 1px solid var(--mta-danger);
   width: 20px;
   height: 20px;
-  border-radius: 4px;
+  border-radius: var(--mta-border-radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -216,13 +274,13 @@
 }
 
 .multi-tokenart .mta-delete-btn:hover {
-  background: var(--mta-red);
+  background: var(--mta-danger);
   color: #fff;
 }
 
 .multi-tokenart .mta-add-placeholder {
   border-style: dashed;
-  border-color: rgba(189, 142, 52, 0.4);
+  border-color: var(--mta-border-gold);
   background: transparent;
   display: flex;
   align-items: center;
@@ -232,21 +290,49 @@
 }
 
 .multi-tokenart .mta-add-placeholder:hover {
-  border-color: var(--mta-gold);
-  background: rgba(189, 142, 52, 0.1);
+  border-color: var(--mta-accent);
+  background: rgba(255, 100, 0, 0.1);
 }
 
 .multi-tokenart .mta-add-placeholder-btn {
-  font-size: 36px;
-  font-weight: 300;
-  color: var(--mta-gold);
-  background: none;
-  border: none;
-  padding: 0;
-  line-height: 1;
-  cursor: pointer;
+  /* Legacy cleanup if needed, replaced by div structure */
+  display: none;
+}
+
+.multi-tokenart .mta-add-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   height: 100%;
+  gap: 2px;
+  pointer-events: none;
+  /* Let clicks pass to the article */
+}
+
+.multi-tokenart .mta-add-icon {
+  font-size: 32px;
+  font-weight: 300;
+  color: var(--mta-border-gold);
+  line-height: 1;
+}
+
+.multi-tokenart .mta-add-hint {
+  font-size: 9px;
+  color: var(--mta-text-muted);
+  text-transform: uppercase;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.multi-tokenart .mta-add-placeholder:hover .mta-add-icon {
+  color: var(--mta-accent);
+}
+
+.multi-tokenart .mta-add-placeholder:hover .mta-add-hint {
+  color: var(--mta-text);
+  opacity: 0.9;
 }
 
 /* Settings Panel (Sidebar) */
@@ -255,23 +341,33 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px dashed rgba(189, 142, 52, 0.3);
-  border-radius: 6px;
+  border: 1px dashed var(--mta-border-gold);
+  border-radius: var(--mta-border-radius);
   color: var(--mta-text-dim);
   font-style: italic;
+  text-align: center;
+  padding: 12px;
 }
 
 .multi-tokenart .mta-settings-panel {
   width: 300px;
   background: rgba(20, 20, 20, 0.95);
-  border: 1px solid var(--mta-gold);
-  border-radius: 6px;
+  border: 1px solid var(--mta-border-gold);
+  border-radius: var(--mta-border-radius);
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   box-shadow: -5px 0 20px rgba(0, 0, 0, 0.5);
   transition: box-shadow 0.3s ease;
+}
+
+.multi-tokenart hr.mta-dashed-separator {
+  border: none;
+  border-top: 1px dashed var(--mta-border-gold);
+  opacity: 0.3;
+  width: 100%;
+  margin: 4px 0;
 }
 
 /* Glow эффект при смене settings */
@@ -283,7 +379,7 @@
   }
 
   50% {
-    box-shadow: 0 0 25px rgba(0, 123, 255, 0.9), inset 0 0 15px rgba(0, 123, 255, 0.4);
+    box-shadow: 0 0 25px rgba(34, 211, 238, 0.9), inset 0 0 15px rgba(34, 211, 238, 0.4);
   }
 }
 
@@ -292,7 +388,7 @@
 }
 
 .multi-tokenart .mta-settings-panel h3 {
-  border-bottom: 1px solid var(--mta-gold);
+  border-bottom: 1px solid var(--mta-border-gold);
   padding-bottom: 6px;
   margin-bottom: 0;
 }
@@ -346,7 +442,7 @@
   min-width: 30px;
   text-align: center;
   font-size: 12px;
-  color: var(--mta-gold);
+  color: var(--mta-accent);
 }
 
 
@@ -356,7 +452,7 @@
 .multi-tokenart input[type="number"],
 .multi-tokenart input[type="color"] {
   background: rgba(0, 0, 0, 0.3);
-  border: 1px solid #444;
+  border: 1px solid var(--mta-border-gold);
   color: var(--mta-text);
   border-radius: 3px;
   padding: 4px 6px;
@@ -365,12 +461,12 @@
 
 .multi-tokenart input[type="text"]:focus,
 .multi-tokenart input[type="number"]:focus {
-  border-color: var(--mta-gold);
-  box-shadow: 0 0 5px rgba(189, 142, 52, 0.3);
+  border-color: var(--mta-accent);
+  box-shadow: 0 0 5px rgba(255, 100, 0, 0.3);
 }
 
 .multi-tokenart input[type="range"] {
-  accent-color: var(--mta-gold);
+  accent-color: var(--mta-accent);
 }
 
 .multi-tokenart .mta-file-input {
@@ -395,21 +491,21 @@
 /* Buttons */
 .multi-tokenart button {
   background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--mta-gold);
-  color: var(--mta-gold);
-  border-radius: 4px;
+  border: 1px solid var(--mta-border-gold);
+  color: var(--mta-border-gold);
+  border-radius: var(--mta-border-radius);
   padding: 4px 10px;
   cursor: pointer;
-  font-family: "Signika", sans-serif;
+  font-family: var(--mta-font-body);
   text-transform: uppercase;
   font-weight: 600;
   transition: all 0.2s;
 }
 
 .multi-tokenart button:hover:not(:disabled) {
-  background: var(--mta-gold);
+  background: var(--mta-accent);
   color: #000;
-  box-shadow: 0 0 10px rgba(189, 142, 52, 0.4);
+  box-shadow: 0 0 10px rgba(255, 100, 0, 0.4);
 }
 
 .multi-tokenart button:disabled {
@@ -419,24 +515,24 @@
 }
 
 .multi-tokenart .mta-button-primary {
-  background: var(--mta-gold);
+  background: var(--mta-accent);
   color: #000;
 }
 
 .multi-tokenart .mta-button-primary:hover:not(:disabled) {
   background: #fff;
-  box-shadow: 0 0 15px var(--mta-gold);
+  box-shadow: 0 0 15px var(--mta-accent);
 }
 
 .multi-tokenart .mta-button-danger {
-  border-color: var(--mta-red);
-  color: var(--mta-red);
+  border-color: var(--mta-danger);
+  color: var(--mta-danger);
 }
 
 .multi-tokenart .mta-button-danger:hover:not(:disabled) {
-  background: var(--mta-red);
+  background: var(--mta-danger);
   color: #fff;
-  box-shadow: 0 0 10px var(--mta-red);
+  box-shadow: 0 0 10px var(--mta-danger);
 }
 
 .multi-tokenart .mta-panel-actions {
@@ -456,12 +552,12 @@
 }
 
 .multi-tokenart ::-webkit-scrollbar-thumb {
-  background: rgba(189, 142, 52, 0.4);
+  background: rgba(159, 146, 117, 0.4);
   border-radius: 3px;
 }
 
 .multi-tokenart ::-webkit-scrollbar-thumb:hover {
-  background: var(--mta-gold);
+  background: var(--mta-border-gold);
 }
 
 .multi-tokenart ::-webkit-scrollbar-track {
@@ -488,11 +584,11 @@
   width: 100%;
   padding: 8px 12px;
   margin-top: 4px;
-  border: 1px solid var(--mta-cyan);
-  color: var(--mta-cyan);
-  background: rgba(34, 211, 238, 0.1);
-  border-radius: 4px;
-  font-family: "Signika", sans-serif;
+  border: 1px solid var(--mta-accent);
+  color: var(--mta-accent);
+  background: rgba(255, 100, 0, 0.1);
+  border-radius: var(--mta-border-radius);
+  font-family: var(--mta-font-body);
   font-weight: 600;
   text-transform: uppercase;
   cursor: pointer;
@@ -504,9 +600,9 @@
 }
 
 .multi-tokenart .mta-create-token-btn:hover:not(:disabled) {
-  background: var(--mta-cyan);
+  background: var(--mta-accent);
   color: #000;
-  box-shadow: 0 0 15px rgba(34, 211, 238, 0.5);
+  box-shadow: 0 0 15px rgba(255, 100, 0, 0.5);
 }
 
 .multi-tokenart .mta-create-token-btn:disabled {

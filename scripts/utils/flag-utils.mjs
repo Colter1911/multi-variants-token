@@ -12,6 +12,8 @@ const DEFAULT_MODULE_DATA = {
   portraitImages: []
 };
 
+
+
 export function getActorModuleData(actor) {
   const raw = foundry.utils.getProperty(actor, `flags.${MODULE_ID}`) ?? {};
 

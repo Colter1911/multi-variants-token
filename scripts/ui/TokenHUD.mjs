@@ -27,7 +27,7 @@ function buildButtonConfig(tokenLike) {
   return {
     name: `${MODULE_ID}-open-manager`,
     title: game.i18n.localize("MTA.TokenHUDButton"),
-    icon: "fas fa-masks-theater",
+    icon: "fas fa-user-cog",
     buttonClass: `${MODULE_ID}-open-manager`,
     onClick: () => openManagerForTokenLike(tokenLike),
     callback: () => openManagerForTokenLike(tokenLike)
@@ -53,7 +53,7 @@ function createHudButton(tokenLike) {
   button.dataset.action = `${MODULE_ID}-open-manager`;
   button.title = game.i18n.localize("MTA.TokenHUDButton");
   button.ariaLabel = button.title;
-  button.innerHTML = '<i class="fas fa-masks-theater"></i>';
+  button.innerHTML = '<i class="fas fa-user-cog"></i>';
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();

@@ -52,8 +52,13 @@ Hooks.once("ready", () => {
   };
 });
 
-Hooks.on("updateActor", (actor, changes) => {
+Hooks.on("updateActor", (actor, changes, options) => {
   console.log("[MTA] updateActor hook fired", { actorName: actor.name, changes });
+
+  if (options && options.mtaManualUpdate) {
+    console.log("[MTA] Ignoring manual update (mtaManualUpdate=true)");
+    return;
+  }
   // Проверяем что изменились именно HP (более точная проверка чем просто "system")
   const hpChanged = foundry.utils.hasProperty(changes, "system.attributes.hp") ||
     foundry.utils.hasProperty(changes, "system.attributes.hp.value") ||
@@ -74,8 +79,13 @@ Hooks.on("updateActor", (actor, changes) => {
   }
 });
 
-Hooks.on("updateToken", (tokenDocument, changes) => {
+Hooks.on("updateToken", (tokenDocument, changes, options) => {
   console.log("[MTA] updateToken hook fired", { tokenName: tokenDocument.name, changes });
+
+  if (options && options.mtaManualUpdate) {
+    console.log("[MTA] Ignoring manual update (mtaManualUpdate=true)");
+    return;
+  }
   const hpLikeChanged = foundry.utils.hasProperty(changes, "delta") || foundry.utils.hasProperty(changes, "actorData");
   if (!hpLikeChanged) return;
 

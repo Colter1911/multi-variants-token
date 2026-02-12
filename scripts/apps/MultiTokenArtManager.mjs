@@ -1,8 +1,10 @@
-import { IMAGE_LIMIT, IMAGE_TYPES, MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
+import { IMAGE_LIMIT, IMAGE_TYPES, MODULE_ID, TOKEN_FLAG_KEYS, DEBUG_VERSION } from "../constants.mjs";
 import { getActorModuleData, setActorModuleData } from "../utils/flag-utils.mjs";
 import { uploadFileToActorFolder } from "../utils/file-utils.mjs";
 import { pickRandomImage, sortImagesByOrder } from "../logic/RandomMode.mjs";
 import { applyTokenImageById, applyPortraitById } from "../logic/AutoActivation.mjs";
+import { applyAutoRotate } from "../logic/AutoRotate.mjs";
+import { resolveHpData } from "../utils/hp-resolver.mjs";
 import { AutoTokenService } from "../logic/AutoTokenService.mjs";
 import { SettingsPanel } from "./SettingsPanel.mjs";
 
@@ -20,7 +22,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     },
     position: {
       width: 900,
-      height: 640
+      height: "auto"
     }
   };
 
@@ -35,6 +37,17 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     this.actor = actor;
     this.tokenDocument = tokenDocument;
     this.activeSettings = null; // { index, imageType }
+
+    // Clipboard Paste Support
+    this._pasteHandler = this.#onPaste.bind(this);
+    this._activePasteZone = null;
+    this._pasteListenerAttached = false;
+  }
+
+  async close(options = {}) {
+    window.removeEventListener("paste", this._pasteHandler);
+    this._pasteListenerAttached = false;
+    return super.close(options);
   }
 
   async _prepareContext() {
@@ -45,6 +58,16 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     if (!data.tokenImages || data.tokenImages.length === 0) {
       // Use current token texture or prototype
       const defaultSrc = this.tokenDocument?.texture?.src ?? this.actor.prototypeToken?.texture?.src ?? "icons/svg/mystery-man.svg";
+
+      // Sync initial Dynamic Ring settings from Token Document
+      const ringData = this.tokenDocument?.ring ?? {};
+      const initialRing = {
+        enabled: ringData.enabled ?? false,
+        scaleCorrection: 1, // Default to 1 as requested previously
+        ringColor: ringData.colors?.ring ? PIXI.utils.hex2string(ringData.colors.ring) : "#ffffff",
+        backgroundColor: ringData.colors?.background ? PIXI.utils.hex2string(ringData.colors.background) : "#000000"
+      };
+
       data.tokenImages = [{
         id: foundry.utils.randomID(),
         src: defaultSrc,
@@ -52,7 +75,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         isDefault: true,
         autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false },
         customScript: "",
-        dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#ffffff", backgroundColor: "#000000" }
+        dynamicRing: initialRing
       }];
       changed = true;
     }
@@ -67,7 +90,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         isDefault: true,
         autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false },
         customScript: "",
-        dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#ffffff", backgroundColor: "#000000" } // Dynamic Ring irrelevant for portrait, but keeping schema consistent is easier
+        dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#ffffff", backgroundColor: "#000000" }
       }];
       changed = true;
     }
@@ -93,21 +116,36 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     tokenImages.forEach(normalizeImage);
     portraitImages.forEach(normalizeImage);
 
-    const activeTokenImageId = this.tokenDocument?.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
-    const activePortraitImageId = this.tokenDocument?.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
+    let activeTokenImageId = this.tokenDocument?.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
+    let activePortraitImageId = this.tokenDocument?.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
+
+    // Fallback: If no flag is set, try to match the current actor image
+    if (!activePortraitImageId && this.actor.img) {
+      const match = portraitImages.find(i => i.src === this.actor.img);
+      if (match) activePortraitImageId = match.id;
+    }
+
+    // Fallback: If no flag is set, try to match the current token texture
+    // (This might help if the token was changed externally or first load)
+    if (!activeTokenImageId && this.tokenDocument?.texture?.src) {
+      const match = tokenImages.find(i => i.src === this.tokenDocument.texture.src);
+      if (match) activeTokenImageId = match.id;
+    }
 
     const tokenCards = tokenImages.map((image, idx) => ({
       ...image,
       idx,
       imageType: IMAGE_TYPES.TOKEN,
-      active: image.id === activeTokenImageId
+      active: image.id === activeTokenImageId,
+      isEditing: this.activeSettings?.imageType === IMAGE_TYPES.TOKEN && this.activeSettings?.index === idx
     }));
 
     const portraitCards = portraitImages.map((image, idx) => ({
       ...image,
       idx,
       imageType: IMAGE_TYPES.PORTRAIT,
-      active: image.id === activePortraitImageId
+      active: image.id === activePortraitImageId,
+      isEditing: this.activeSettings?.imageType === IMAGE_TYPES.PORTRAIT && this.activeSettings?.index === idx
     }));
 
     let activeSettingsData = null;
@@ -136,7 +174,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       global: data.global,
       tokenCards,
       portraitCards,
-      activeSettings: activeSettingsData
+      activeSettings: activeSettingsData,
+      debugVersion: DEBUG_VERSION
     };
   }
 
@@ -196,9 +235,21 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       });
     }
 
-    // Drag & Drop Visualization
+    // Drag & Drop Visualization + Clipboard Zone Tracking
     const sections = this.element.querySelectorAll(".mta-section[data-image-type]");
     sections.forEach(section => {
+      // Paste Zone Tracking
+      section.addEventListener("mouseenter", () => {
+        this._activePasteZone = section.dataset.imageType;
+        // Optional: Hint?
+      });
+      section.addEventListener("mouseleave", () => {
+        if (this._activePasteZone === section.dataset.imageType) {
+          this._activePasteZone = null;
+        }
+      });
+
+      // Drag & Drop
       section.addEventListener("dragenter", (e) => {
         e.preventDefault();
         section.classList.add("mta-drop-zone-active");
@@ -215,8 +266,62 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       });
     });
 
-    this.element.addEventListener("dragover", (event) => event.preventDefault());
-    this.element.addEventListener("drop", (event) => this.#onDrop(event));
+    // Prevent duplicate listeners on the root element
+    if (!this._dropListenersAttached) {
+      this.element.addEventListener("dragover", (event) => event.preventDefault());
+      this.element.addEventListener("drop", (event) => this.#onDrop(event));
+      this._dropListenersAttached = true;
+    }
+
+    // Clipboard Listener
+    if (!this._pasteListenerAttached) {
+      window.addEventListener("paste", this._pasteHandler);
+      this._pasteListenerAttached = true;
+    }
+  }
+
+  async #onPaste(event) {
+    if (!this._activePasteZone) return;
+    if (event.defaultPrevented) return;
+
+    const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+    let foundImage = false;
+
+    for (const item of items) {
+      if (item.type.indexOf("image") === 0) {
+        foundImage = true;
+        event.preventDefault();
+        const blob = item.getAsFile();
+        const reader = new FileReader();
+
+        reader.onload = async (event) => {
+          // We need a proper File object with a name for upload
+          // Generate a timestamped name
+          const ext = blob.type.split("/")[1] || "png";
+          const fileName = `pasted_image_${Date.now()}.${ext}`;
+          const file = new File([blob], fileName, { type: blob.type });
+
+          const path = await uploadFileToActorFolder(file, this.actor);
+          if (path) {
+            await this.#addImage(path, this._activePasteZone);
+            ui.notifications.info(`Pasted image added to ${this._activePasteZone === IMAGE_TYPES.TOKEN ? "Token" : "Portrait"} list.`);
+          }
+        };
+        reader.readAsArrayBuffer(blob); // Trigger the read
+        // Actually, uploadFileToActorFolder takes a File object directly, no need to read it first unless for preview
+        // but wait, the reader logic above was pure boilerplate. Let's simplify.
+      }
+    }
+
+    if (foundImage) return;
+
+    // Handle text paste (URLs)?
+    const pastedText = event.clipboardData.getData("text/plain");
+    if (pastedText && (pastedText.startsWith("http") || pastedText.match(/\.(jpg|jpeg|png|webp|gif|svg)$/i))) {
+      event.preventDefault();
+      await this.#addImage(pastedText, this._activePasteZone);
+      ui.notifications.info(`Pasted URL added to ${this._activePasteZone === IMAGE_TYPES.TOKEN ? "Token" : "Portrait"} list.`);
+    }
   }
   async #onDrop(event) {
     event.preventDefault();
@@ -268,9 +373,17 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       return;
     }
 
+    // Check for duplicates (But allow mystery-man placeholder to be duplicated)
+    if (src !== "icons/svg/mystery-man.svg" && list.some(img => img.src === src)) {
+      ui.notifications.warn("This image is already in the list.");
+      return;
+    }
+
     const newImage = {
       id: foundry.utils.randomID(),
       src: src,
+      scaleX: this.tokenDocument?.texture.scaleX ?? 1,
+      scaleY: this.tokenDocument?.texture.scaleY ?? 1,
       sort: list.length,
       isDefault: list.length === 0,
       autoEnable: {
@@ -387,6 +500,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     const image = list[index];
     image.src = src;
+    image.scaleX = Number(panel.querySelector("[name='scaleX']")?.value ?? 1);
+    image.scaleY = Number(panel.querySelector("[name='scaleY']")?.value ?? 1);
     image.isDefault = isDefault;
     image.autoEnable = autoEnable;
 
@@ -399,11 +514,37 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       };
     }
 
-    // Ensure only one default? Logic implies "isDefault" means use this one if no other conditions met.
-    // If multiple defaults, first one wins typically.
+    // Ensure only one default
+    if (isDefault) {
+      list.forEach((img, idx) => {
+        if (idx !== index) img.isDefault = false;
+      });
+    }
 
     await setActorModuleData(this.actor, data);
     ui.notifications.info("Settings saved.");
+
+    // Auto-update if this image is currently active
+    if (imageType === IMAGE_TYPES.TOKEN) {
+      const activeId = this.tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
+      if (activeId === image.id) {
+        await applyTokenImageById({
+          actor: this.actor,
+          tokenDocument: this.tokenDocument,
+          imageId: image.id
+        });
+      }
+    } else {
+      const activeId = this.tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
+      if (activeId === image.id) {
+        await applyPortraitById({
+          actor: this.actor,
+          tokenDocument: this.tokenDocument,
+          imageId: image.id
+        });
+      }
+    }
+
     this.render();
   }
 
@@ -472,6 +613,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     else if (name === "autoRotate") data.global.autoRotate = checked;
 
     await setActorModuleData(this.actor, data);
+
     this.render();
   }
 
@@ -534,7 +676,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       image.src = uploadedPath;
       image.dynamicRing = {
         enabled: true,
-        scaleCorrection: 0.8,
+        scaleCorrection: 1,
         ringColor: "#ffffff",
         backgroundColor: "#000000"
       };

@@ -1,5 +1,5 @@
-<article class="mta-image-card {{#if active}}is-active{{/if}}" data-image-id="{{id}}" data-image-type="{{imageType}}"
-  data-index="{{idx}}">
+<article class="mta-image-card {{#if active}}is-active{{/if}} {{#if isEditing}}is-editing{{/if}}" data-image-id="{{id}}"
+  data-image-type="{{imageType}}" data-index="{{idx}}">
   <div class="mta-card-clickable" data-action="select-image">
     <img src="{{src}}" alt="{{imageType}} image {{idx}}" />
     {{#if active}}<span class="mta-active-dot"></span>{{/if}}

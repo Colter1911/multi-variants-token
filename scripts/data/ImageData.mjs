@@ -8,6 +8,8 @@ export class ImageData extends foundry.abstract.DataModel {
     return {
       id: new fields.StringField({ required: true, blank: false }),
       src: new fields.StringField({ required: true, blank: false }),
+      scaleX: new fields.NumberField({ required: true, initial: 1 }),
+      scaleY: new fields.NumberField({ required: true, initial: 1 }),
       sort: new fields.NumberField({ required: true, integer: true, initial: 0 }),
       isDefault: new fields.BooleanField({ required: true, initial: false }),
       autoEnable: new fields.SchemaField({

@@ -1,6 +1,7 @@
 <section class="mta-layout">
   <header class="mta-header">
     <h2>{{title}}</h2>
+    <span class="mta-debug-version" style="font-size: 0.8em; color: var(--mta-cyan);">{{debugVersion}}</span>
   </header>
 
   <div class="mta-body">
@@ -8,21 +9,26 @@
       <div class="mta-section" data-image-type="token">
         <div class="mta-section-header">
           <h3>{{localize "MTA.TokenSection"}}</h3>
-          <label><input type="checkbox" name="tokenRandom" data-action="toggle-global" {{checked
-              global.tokenRandom}} />{{localize "MTA.Random"}}</label>
-          <button type="button" data-action="refresh-random" data-image-type="token">🔄 {{localize
-            "MTA.Refresh"}}</button>
-          <button type="button" class="mta-plus-btn" data-action="add-image" data-image-type="token">+</button>
+          <label class="mta-autorotate"><input type="checkbox" name="autoRotate" data-action="toggle-global" {{checked
+              global.autoRotate}} />{{localize "MTA.AutoRotate"}}</label>
+          <div class="mta-control-group">
+            <label><input type="checkbox" name="tokenRandom" data-action="toggle-global" {{checked
+                global.tokenRandom}} />{{localize "MTA.Random"}}</label>
+            <button type="button" data-action="refresh-random" data-image-type="token">{{localize
+              "MTA.PickRandom"}}</button>
+          </div>
         </div>
-        <label class="mta-autorotate"><input type="checkbox" name="autoRotate" data-action="toggle-global" {{checked
-            global.autoRotate}} />{{localize
-          "MTA.AutoRotate"}}</label>
         <div class="mta-grid">
           {{#each tokenCards}}
           {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
           {{/each}}
-          <article class="mta-image-card mta-add-placeholder" data-action="add-image" data-image-type="token">
-            <button type="button" class="mta-add-placeholder-btn">+</button>
+          <article class="mta-image-card mta-add-placeholder" data-action="add-image" data-image-type="token"
+            title="{{localize 'MTA.AddImage'}}">
+            <div class="mta-add-content">
+              <span class="mta-add-hint">Ctrl + V</span>
+              <span class="mta-add-icon">+</span>
+              <span class="mta-add-hint">Drag'n'Drop</span>
+            </div>
           </article>
         </div>
       </div>
@@ -30,18 +36,23 @@
       <div class="mta-section" data-image-type="portrait">
         <div class="mta-section-header">
           <h3>{{localize "MTA.PortraitSection"}}</h3>
-          <label><input type="checkbox" name="portraitRandom" data-action="toggle-global" {{checked
-              global.portraitRandom}} />{{localize "MTA.Random"}}</label>
-          <button type="button" data-action="refresh-random" data-image-type="portrait">🔄 {{localize
-            "MTA.Refresh"}}</button>
-          <button type="button" class="mta-plus-btn" data-action="add-image" data-image-type="portrait">+</button>
+          <div class="mta-control-group">
+            <label><input type="checkbox" name="portraitRandom" data-action="toggle-global" {{checked
+                global.portraitRandom}} />{{localize "MTA.Random"}}</label>
+            <button type="button" data-action="refresh-random" data-image-type="portrait">{{localize
+              "MTA.PickRandom"}}</button>
+          </div>
         </div>
         <div class="mta-grid">
           {{#each portraitCards}}
           {{> "modules/multi-tokenart/templates/partials/image-card.hbs" this}}
           {{/each}}
           <article class="mta-image-card mta-add-placeholder" data-action="add-image" data-image-type="portrait">
-            <button type="button" class="mta-add-placeholder-btn">+</button>
+            <div class="mta-add-content">
+              <span class="mta-add-hint">Ctrl + V</span>
+              <span class="mta-add-icon">+</span>
+              <span class="mta-add-hint">Drag'n'Drop</span>
+            </div>
           </article>
         </div>
       </div>
@@ -51,7 +62,7 @@
     {{> "modules/multi-tokenart/templates/settings-panel.hbs" activeSettings}}
     {{else}}
     <aside class="mta-settings-placeholder">
-      <p>Select 🖊 on an image to open settings.</p>
+      <p>{{localize "MTA.PlaceholderSettings"}}</p>
     </aside>
     {{/if}}
   </div>

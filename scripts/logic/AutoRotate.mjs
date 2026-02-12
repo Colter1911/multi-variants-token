@@ -4,41 +4,45 @@ import { getTokenFlag, setTokenFlag } from "../utils/flag-utils.mjs";
 export async function applyAutoRotate({ tokenDocument, shouldRotate }) {
   if (!tokenDocument) return;
 
-  // Получаем текущий rotation
+  // Get current rotation directly from data to be sure
   const currentRotation = tokenDocument.rotation ?? 0;
 
-  // Получаем сохраненный оригинальный rotation
   let originalRotation = getTokenFlag(tokenDocument, TOKEN_FLAG_KEYS.ORIGINAL_ROTATION);
 
-  // Если оригинал не сохранен и мы первый раз применяем rotation
+  // If original is missing, initialize it
   if (originalRotation === null || originalRotation === undefined) {
-    originalRotation = currentRotation;
+    // If we are about to rotate DOWN (shouldRotate=true) and we are NOT already at 270, assume current is original
+    // If we are already at 270, we might be in a bad state where we forgot original. Default to 0.
+    if (shouldRotate && currentRotation === 270) {
+      originalRotation = 0;
+    } else {
+      originalRotation = currentRotation;
+    }
     await setTokenFlag(tokenDocument, TOKEN_FLAG_KEYS.ORIGINAL_ROTATION, originalRotation);
   }
 
   const updates = {};
-
-  console.log("[Multi Token Art] applyAutoRotate", {
-    tokenName: tokenDocument.name,
-    shouldRotate,
-    currentRotation,
-    originalRotation
+  /*
+  console.log("[MTA] applyAutoRotate", { 
+    name: tokenDocument.name, 
+    shouldRotate, 
+    current: currentRotation, 
+    original: originalRotation 
   });
+  */
 
   if (shouldRotate) {
-    // Rotate to 270 degrees (lying on side)
     if (currentRotation !== 270) {
       updates.rotation = 270;
     }
   } else {
-    // Restore original rotation
+    // Restore
     if (currentRotation !== originalRotation) {
       updates.rotation = originalRotation;
     }
   }
 
-  if (Object.keys(updates).length > 0) {
-    console.log("[Multi Token Art] Applying rotation update", updates);
-    await tokenDocument.update(updates);
-  }
+  if (foundry.utils.isEmpty(updates)) return;
+
+  await tokenDocument.update(updates);
 }
