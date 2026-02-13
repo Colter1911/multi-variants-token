@@ -78,6 +78,38 @@ export function getRestoreRingUpdate(tokenDocument) {
   return updates;
 }
 
+/**
+ * Calculates the update payload to DISABLE the dynamic ring.
+ * But we still snapshot the original state if needed, so we can restore it later.
+ * 
+ * @param {TokenDocument} tokenDocument 
+ * @returns {Object} 
+ */
+export function getDisableRingUpdate(tokenDocument) {
+  if (!tokenDocument) return {};
+
+  const updates = {};
+  const currentFlags = tokenDocument.flags?.[MODULE_ID] ?? {};
+
+  // 1. Snapshot Original Ring if not exists
+  const originalRing = currentFlags[TOKEN_FLAG_KEYS.ORIGINAL_RING];
+  if (!originalRing) {
+    const currentRing = foundry.utils.deepClone(tokenDocument.ring ?? {});
+    // Ensure non-undefined enabled state
+    if (foundry.utils.isEmpty(currentRing) || currentRing.enabled === undefined) {
+      currentRing.enabled = false;
+    }
+    updates[`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ORIGINAL_RING}`] = currentRing;
+  }
+
+  // 2. Explicitly Disable Ring
+  updates.ring = {
+    enabled: false
+  };
+
+  return updates;
+}
+
 // Keep old functions for backward compatibility or if called elsewhere (though we should migrate all)
 // They now just wrap the new logic.
 export async function applyDynamicRing({ tokenDocument, ringConfig }) {

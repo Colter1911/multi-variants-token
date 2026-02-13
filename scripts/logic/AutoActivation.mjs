@@ -2,41 +2,43 @@ import { MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
 import { getActorModuleData } from "../utils/flag-utils.mjs";
 import { resolveHpData } from "../utils/hp-resolver.mjs";
 import { applyAutoRotate } from "./AutoRotate.mjs";
-import { getDynamicRingUpdate, getRestoreRingUpdate } from "./DynamicRing.mjs";
+import { getDynamicRingUpdate, getRestoreRingUpdate, getDisableRingUpdate } from "./DynamicRing.mjs";
 
 
 export async function runAutoActivation({ actor, tokenDocument }) {
   if (!actor || !tokenDocument) return;
 
   const data = getActorModuleData(actor);
-  // const hp = resolveHpData(actor); // Not strictly needed here if selectImageForHp re-resolves or we pass it? 
-  // actually selectImageForHp calculates hp itself in the new logic I designed.
 
-  // Checking for random mode
-  if (data.global.tokenRandom) {
-    // Random mode logic... existing code had it but it was complex.
-    // For now, let's assume random mode is handled elsewhere or via selectImageForHp if needed?
-    // Wait, the previous code had specific random headers.
-    // Let's simplified it to just use selectImageForHp for now to FIX THE BUG.
-    // If random mode is active, selectImageForHp might not be enough?
-    // Actually, let's check the old code... 
-    // It called selectImageForHp with images list.
-  }
-
-  // Debug Logging
-  const currentActiveId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
-  const selection = selectImageForHp({ actor, tokenDocument });
-
-  console.log("[MTA-DEBUG] runAutoActivation", {
-    tokenName: tokenDocument.name,
-    currentActiveId,
-    selectionId: selection?.id,
-    hp: actor.system.attributes.hp.value
+  // 1. Process TOKEN Images
+  const currentTokenId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
+  const tokenSelection = findBestImageForHp({
+    actor,
+    tokenDocument,
+    imageList: data.tokenImages,
+    activeId: currentTokenId,
+    preConditionFlagKey: "preConditionImageId"
   });
 
-  if (selection && selection.id !== currentActiveId) {
-    console.log("[MTA-DEBUG] Applying selection", selection.src);
-    await applyTokenImageById({ actor, tokenDocument, imageId: selection.id });
+  if (tokenSelection && tokenSelection.id !== currentTokenId) {
+    console.log("[MTA-DEBUG] Auto-Activating Token Image", tokenSelection.src);
+    // Pass the selection object directly to avoid race conditions with setting flags
+    await applyTokenImageById({ actor, tokenDocument, imageObject: tokenSelection });
+  }
+
+  // 2. Process PORTRAIT Images
+  const currentPortraitId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
+  const portraitSelection = findBestImageForHp({
+    actor,
+    tokenDocument,
+    imageList: data.portraitImages,
+    activeId: currentPortraitId,
+    preConditionFlagKey: "preConditionPortraitId"
+  });
+
+  if (portraitSelection && portraitSelection.id !== currentPortraitId) {
+    console.log("[MTA-DEBUG] Auto-Activating Portrait Image", portraitSelection.src);
+    await applyPortraitById({ actor, tokenDocument, imageObject: portraitSelection });
   }
 
   // Auto Rotate
@@ -46,38 +48,38 @@ export async function runAutoActivation({ actor, tokenDocument }) {
   }
 }
 
-export function selectImageForHp({ actor, tokenDocument }) {
-  const data = getActorModuleData(actor);
-  const images = data.tokenImages;
-
+/**
+ * Generic function to find the best image based on HP state
+ */
+export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, preConditionFlagKey }) {
   // Safety check
-  if (!images || !images.length) return null;
+  if (!imageList || !imageList.length) return null;
 
   const hp = resolveHpData(actor);
   const hpValue = hp.current;
-  const hpMax = hp.max;
   const hpPercent = hp.percent;
 
   // Logic: Find the highest priority matching image
   // 1. DEAD (HP <= 0)
-  const die = images.filter(i => i.autoEnable?.enabled && i.autoEnable?.die && hpValue <= 0);
+  const die = imageList.filter(i => i.autoEnable?.enabled && i.autoEnable?.die && hpValue <= 0);
 
-  // 2. WOUNDED (HP > 0 but <= threshold)
-  const wounded = images.filter(i => i.autoEnable?.enabled && i.autoEnable?.wounded && hpValue > 0 && hpPercent <= (i.autoEnable.woundedPercent || 50));
+  // 2. WOUNDED (HP <= threshold)
+  // FIX: Removed 'hpValue > 0' check. 
+  // This allows Wounded images to be selected even at 0 HP if no explicit Die image exists.
+  const wounded = imageList.filter(i => i.autoEnable?.enabled && i.autoEnable?.wounded && hpPercent <= (i.autoEnable.woundedPercent || 50));
 
   if (die.length) {
-    console.log("[MTA-DEBUG] Found DIE image", die[0].id);
     return die[0];
   }
   if (wounded.length) {
-    console.log("[MTA-DEBUG] Found WOUNDED image", wounded[0].id);
+    // If we are dead (0 HP) but have no Die image, we fall through here.
+    // 'wounded' will contain images since 0 <= 50.
+    // So we return the wounded image as fallback.
     return wounded[0];
   }
 
-  // 2. Manual Image Check
-  // If we are NOT in a special state, we check if the current image is a manual selection that should be preserved.
-  const activeId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
-  const activeImg = images.find(i => i.id === activeId);
+  // 2. Manual Image Check (Persistence)
+  const activeImg = imageList.find(i => i.id === activeId);
 
   if (activeImg) {
     // Is the current image "Special" (Wounded/Die)?
@@ -85,54 +87,54 @@ export function selectImageForHp({ actor, tokenDocument }) {
 
     // If it's NOT special, and valid, we keep it (Manual override persistence)
     if (!isSpecialInfo) {
-      console.log("[MTA-DEBUG] Keeping current manual image", activeImg.src);
       return activeImg;
     }
 
     // HEALING LOGIC:
-    // If we ARE currently on a special image, but we are no longer in that state (e.g. healed above 0 or wounded threshold),
-    // The code above (die.length/wounded.length) would have already caught us if we were still in state.
-    // If we reached here, it means we are "Healthy" relative to the current image's triggers.
-    // So we should try to restore the "Pre-Condition" image.
-    const preConditionId = tokenDocument.getFlag(MODULE_ID, "preConditionImageId");
+    // We are currently on a special image, but we are no longer in that special state (healed).
+    // Try to restore the "Pre-Condition" image.
+    const preConditionId = tokenDocument.getFlag(MODULE_ID, preConditionFlagKey);
     if (preConditionId) {
-      const preImg = images.find(i => i.id === preConditionId);
+      const preImg = imageList.find(i => i.id === preConditionId);
       if (preImg) {
-        console.log("[MTA-DEBUG] Restoring Pre-Condition Image", preImg.src);
         return preImg;
       }
     }
   }
 
   // 3. Fallback to Default
-  const defaultImage = images.find(i => i.isDefault) ?? null;
-  console.log("[MTA-DEBUG] Returning default image", defaultImage?.src);
+  const defaultImage = imageList.find(i => i.isDefault) ?? null;
   return defaultImage;
 }
 
-export async function applyTokenImageById({ actor, tokenDocument, imageId }) {
-  if (!actor || !tokenDocument || !imageId) return;
+export async function applyTokenImageById({ actor, tokenDocument, imageId, imageObject = null }) {
+  if (!actor || !tokenDocument) return;
 
+  let image = imageObject;
   const data = getActorModuleData(actor);
-  const image = data.tokenImages.find((it) => it.id === imageId);
+
+  if (!image) {
+    if (!imageId) return;
+    image = data.tokenImages.find((it) => it.id === imageId);
+  }
+
   if (!image) return;
 
-  console.log("[MTA] Applying TOKEN image", { imageId, src: image.src });
+  console.log("[MTA] Applying TOKEN image", { imageId: image.id, src: image.src });
 
   let updates = {
     "texture.src": image.src,
     "texture.scaleX": image.scaleX ?? 1,
     "texture.scaleY": image.scaleY ?? 1,
-    [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: imageId
+    [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id
   };
 
   const updateOptions = {
-    animation: { duration: 0 }, // Disable animation to prevent scale glitches during renderer switch
+    animation: { duration: 0 }, // Disable animation to prevent scale glitches
     mtaManualUpdate: true
   };
 
-  // Check if we are switching TO a special image FROM a normal image
-  // If so, save the current normal image as "Pre-Condition" image to restore later.
+  // Pre-Condition Logic
   const currentActiveId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
   const currentImage = data.tokenImages.find(i => i.id === currentActiveId);
 
@@ -142,21 +144,21 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId }) {
     updates[`flags.${MODULE_ID}.preConditionImageId`] = null;
   }
 
-  // Calculate Dynamic Ring Updates (Atomic Merge)
+  // FORCE UPDATE
+  updates[`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.LAST_UPDATE}`] = Date.now();
+
+  // Dynamic Ring
   let ringUpdates = {};
   if (image.dynamicRing?.enabled) {
-    // Import these helper functions dynamically or ensure they are imported at top
     ringUpdates = getDynamicRingUpdate(tokenDocument, image.dynamicRing);
   } else {
-    ringUpdates = getRestoreRingUpdate(tokenDocument);
+    ringUpdates = getDisableRingUpdate(tokenDocument);
   }
 
-  // Merge ring updates into main updates
   if (ringUpdates && !foundry.utils.isEmpty(ringUpdates)) {
     updates = foundry.utils.mergeObject(updates, ringUpdates);
   }
 
-  // Perform ONE single atomic update
   await tokenDocument.update(updates, updateOptions);
 
   if (tokenDocument.object) {
@@ -164,15 +166,48 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId }) {
   }
 }
 
-export async function applyPortraitById({ actor, tokenDocument, imageId }) {
-  if (!actor || !tokenDocument || !imageId) return;
+export async function applyPortraitById({ actor, tokenDocument, imageId, imageObject = null }) {
+  if (!actor || !tokenDocument) return;
 
+  let image = imageObject;
   const data = getActorModuleData(actor);
-  const image = data.portraitImages.find((it) => it.id === imageId);
+
+  if (!image) {
+    if (!imageId) return;
+    image = data.portraitImages.find((it) => it.id === imageId);
+  }
+
   if (!image) return;
 
-  console.log("[MTA] Applying PORTRAIT image", { imageId, src: image.src });
+  console.log("[MTA] Applying PORTRAIT image", { imageId: image.id, src: image.src });
+
+  // Pre-Condition Logic for Portrait
+  let updates = {};
+  const currentActiveId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
+  const currentImage = data.portraitImages.find(i => i.id === currentActiveId);
+
+  // We need to store this flag as well
+  if (image.autoEnable?.enabled && currentImage && !currentImage.autoEnable?.enabled) {
+    updates[`flags.${MODULE_ID}.preConditionPortraitId`] = currentActiveId;
+  } else if (!image.autoEnable?.enabled) {
+    updates[`flags.${MODULE_ID}.preConditionPortraitId`] = null;
+  }
+
+  // Update Flag + Actor Image
+  updates[`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID}`] = image.id;
+
+  // Since we are updating Actor, we might not need to update Token flags via tokenDocument.update for the actor image,
+  // BUT we need to store the flags on the token document to persist state relative to that token's automation?
+  // Actually, portraits are actor-level usually, but our logic runs via Token Document hooks.
+  // Let's keep flags on Token Document to avoid polluting Actor if multiple tokens exist?
+  // Wait, if we update Actor.img, it affects ALL tokens linked to it.
+  // Standard Foundry behavior: Auto-activation usually drives the specific Token's appearance.
+  // But Portrait is unique to the Actor.
+  // If we change Actor.img, it changes for everyone.
+  // That's acceptable for "Portrait" switching.
 
   await actor.update({ img: image.src });
-  await tokenDocument.setFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID, imageId);
+
+  // Apply flag updates to Token (to remember state)
+  await tokenDocument.update(updates, { mtaManualUpdate: true });
 }

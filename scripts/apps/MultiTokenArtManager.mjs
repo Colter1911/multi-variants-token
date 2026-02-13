@@ -531,7 +531,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         await applyTokenImageById({
           actor: this.actor,
           tokenDocument: this.tokenDocument,
-          imageId: image.id
+          imageObject: image // Pass the updated object directly to avoid race conditions
         });
       }
     } else {

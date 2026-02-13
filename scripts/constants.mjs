@@ -1,5 +1,5 @@
 export const MODULE_ID = "multi-tokenart";
-export const DEBUG_VERSION = "v0.4.19";
+export const DEBUG_VERSION = "v0.4.23";
 
 export const SETTINGS = {
   HP_CURRENT_PATH: "hpCurrentPath",
@@ -22,5 +22,6 @@ export const TOKEN_FLAG_KEYS = {
   ACTIVE_TOKEN_IMAGE_ID: "activeTokenImageId",
   ACTIVE_PORTRAIT_IMAGE_ID: "activePortraitImageId",
   ORIGINAL_RING: "originalRing",
-  ORIGINAL_ROTATION: "originalRotation"
+  ORIGINAL_ROTATION: "originalRotation",
+  LAST_UPDATE: "lastUpdate"
 };
