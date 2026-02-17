@@ -3,12 +3,28 @@ import { getActorModuleData } from "../utils/flag-utils.mjs";
 import { resolveHpData } from "../utils/hp-resolver.mjs";
 import { applyAutoRotate } from "./AutoRotate.mjs";
 import { getDynamicRingUpdate, getRestoreRingUpdate, getDisableRingUpdate } from "./DynamicRing.mjs";
+import { sortImagesByOrder } from "./RandomMode.mjs";
+
+function getLinkedPortraitByTokenImage({ actorData, tokenImageId }) {
+  if (!actorData?.global?.linkTokenPortrait) return null;
+  if (!tokenImageId) return null;
+
+  const sortedTokens = sortImagesByOrder(actorData.tokenImages ?? []);
+  const sortedPortraits = sortImagesByOrder(actorData.portraitImages ?? []);
+  if (!sortedTokens.length || !sortedPortraits.length) return null;
+
+  const tokenIndex = sortedTokens.findIndex((image) => image.id === tokenImageId);
+  if (tokenIndex < 0) return null;
+
+  return sortedPortraits[tokenIndex] ?? null;
+}
 
 
 export async function runAutoActivation({ actor, tokenDocument }) {
   if (!actor || !tokenDocument) return;
 
   const data = getActorModuleData(actor);
+  let selectedTokenImageId = null;
 
   // 1. Process TOKEN Images
   const currentTokenId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
@@ -24,21 +40,38 @@ export async function runAutoActivation({ actor, tokenDocument }) {
     console.log("[MTA-DEBUG] Auto-Activating Token Image", tokenSelection.src);
     // Pass the selection object directly to avoid race conditions with setting flags
     await applyTokenImageById({ actor, tokenDocument, imageObject: tokenSelection });
+    selectedTokenImageId = tokenSelection.id;
+  } else {
+    selectedTokenImageId = currentTokenId ?? tokenSelection?.id ?? null;
   }
 
   // 2. Process PORTRAIT Images
   const currentPortraitId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
-  const portraitSelection = findBestImageForHp({
-    actor,
-    tokenDocument,
-    imageList: data.portraitImages,
-    activeId: currentPortraitId,
-    preConditionFlagKey: "preConditionPortraitId"
+  const linkedPortrait = getLinkedPortraitByTokenImage({
+    actorData: data,
+    tokenImageId: selectedTokenImageId
   });
 
-  if (portraitSelection && portraitSelection.id !== currentPortraitId) {
-    console.log("[MTA-DEBUG] Auto-Activating Portrait Image", portraitSelection.src);
-    await applyPortraitById({ actor, tokenDocument, imageObject: portraitSelection });
+  if (data.global.linkTokenPortrait) {
+    // Link mode: portrait follows token by visual order.
+    // If no portrait pair exists for the selected token index, keep current portrait unchanged.
+    if (linkedPortrait && linkedPortrait.id !== currentPortraitId) {
+      console.log("[MTA-DEBUG] Linked Portrait activation", linkedPortrait.src);
+      await applyPortraitById({ actor, tokenDocument, imageObject: linkedPortrait });
+    }
+  } else {
+    const portraitSelection = findBestImageForHp({
+      actor,
+      tokenDocument,
+      imageList: data.portraitImages,
+      activeId: currentPortraitId,
+      preConditionFlagKey: "preConditionPortraitId"
+    });
+
+    if (portraitSelection && portraitSelection.id !== currentPortraitId) {
+      console.log("[MTA-DEBUG] Auto-Activating Portrait Image", portraitSelection.src);
+      await applyPortraitById({ actor, tokenDocument, imageObject: portraitSelection });
+    }
   }
 
   // Auto Rotate
@@ -108,7 +141,7 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
 }
 
 export async function applyTokenImageById({ actor, tokenDocument, imageId, imageObject = null }) {
-  if (!actor || !tokenDocument) return;
+  if (!actor) return;
 
   let image = imageObject;
   const data = getActorModuleData(actor);
@@ -121,6 +154,28 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
   if (!image) return;
 
   console.log("[MTA] Applying TOKEN image", { imageId: image.id, src: image.src });
+
+  const linkedPortrait = getLinkedPortraitByTokenImage({
+    actorData: data,
+    tokenImageId: image.id
+  });
+
+  // Actor-only context (e.g. manager opened from actor sheet without placed token).
+  // Apply to prototype token so future placed tokens inherit the selection.
+  if (!tokenDocument) {
+    await actor.update({
+      "prototypeToken.texture.src": image.src,
+      "prototypeToken.texture.scaleX": image.scaleX ?? 1,
+      "prototypeToken.texture.scaleY": image.scaleY ?? 1,
+      [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id
+    });
+
+    if (linkedPortrait) {
+      await applyPortraitById({ actor, tokenDocument: null, imageObject: linkedPortrait });
+    }
+
+    return;
+  }
 
   let updates = {
     "texture.src": image.src,
@@ -164,10 +219,17 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
   if (tokenDocument.object) {
     tokenDocument.object.refresh();
   }
+
+  if (linkedPortrait) {
+    const currentPortraitId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
+    if (linkedPortrait.id !== currentPortraitId) {
+      await applyPortraitById({ actor, tokenDocument, imageObject: linkedPortrait });
+    }
+  }
 }
 
 export async function applyPortraitById({ actor, tokenDocument, imageId, imageObject = null }) {
-  if (!actor || !tokenDocument) return;
+  if (!actor) return;
 
   let image = imageObject;
   const data = getActorModuleData(actor);
@@ -181,20 +243,22 @@ export async function applyPortraitById({ actor, tokenDocument, imageId, imageOb
 
   console.log("[MTA] Applying PORTRAIT image", { imageId: image.id, src: image.src });
 
-  // Pre-Condition Logic for Portrait
+  // Pre-Condition logic is token-specific, so only apply if tokenDocument is present.
   let updates = {};
-  const currentActiveId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
-  const currentImage = data.portraitImages.find(i => i.id === currentActiveId);
+  if (tokenDocument) {
+    const currentActiveId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
+    const currentImage = data.portraitImages.find(i => i.id === currentActiveId);
 
-  // We need to store this flag as well
-  if (image.autoEnable?.enabled && currentImage && !currentImage.autoEnable?.enabled) {
-    updates[`flags.${MODULE_ID}.preConditionPortraitId`] = currentActiveId;
-  } else if (!image.autoEnable?.enabled) {
-    updates[`flags.${MODULE_ID}.preConditionPortraitId`] = null;
+    // We need to store this flag as well
+    if (image.autoEnable?.enabled && currentImage && !currentImage.autoEnable?.enabled) {
+      updates[`flags.${MODULE_ID}.preConditionPortraitId`] = currentActiveId;
+    } else if (!image.autoEnable?.enabled) {
+      updates[`flags.${MODULE_ID}.preConditionPortraitId`] = null;
+    }
+
+    // Update active portrait flag for token context.
+    updates[`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID}`] = image.id;
   }
-
-  // Update Flag + Actor Image
-  updates[`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID}`] = image.id;
 
   // Since we are updating Actor, we might not need to update Token flags via tokenDocument.update for the actor image,
   // BUT we need to store the flags on the token document to persist state relative to that token's automation?
@@ -206,8 +270,15 @@ export async function applyPortraitById({ actor, tokenDocument, imageId, imageOb
   // If we change Actor.img, it changes for everyone.
   // That's acceptable for "Portrait" switching.
 
-  await actor.update({ img: image.src });
+  const actorUpdates = { img: image.src };
+  if (!tokenDocument) {
+    actorUpdates[`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID}`] = image.id;
+  }
+
+  await actor.update(actorUpdates);
 
   // Apply flag updates to Token (to remember state)
-  await tokenDocument.update(updates, { mtaManualUpdate: true });
+  if (tokenDocument && !foundry.utils.isEmpty(updates)) {
+    await tokenDocument.update(updates, { mtaManualUpdate: true });
+  }
 }

@@ -3,6 +3,7 @@ import { MultiTokenArtManager } from "../apps/MultiTokenArtManager.mjs";
 
 const HOOK_GUARD = Symbol.for("multi-tokenart.hud-hooks-registered");
 const HUD_BUTTON_CLASS = "control-icon multi-tokenart-open-manager";
+const ACTOR_HEADER_BUTTON_CLASS = `${MODULE_ID}-open-manager`;
 
 function isTokenHudApplication(app) {
   const tokenHudClass = foundry?.applications?.hud?.TokenHUD;
@@ -10,17 +11,35 @@ function isTokenHudApplication(app) {
   return app?.constructor?.name === "TokenHUD";
 }
 
+function isActorDocument(documentLike) {
+  return documentLike?.documentName === "Actor" || documentLike?.constructor?.name === "Actor";
+}
+
 function resolveTokenDocument(tokenLike) {
-  return tokenLike?.document ?? tokenLike ?? null;
+  const candidate = tokenLike?.document ?? tokenLike ?? null;
+  if (!candidate) return null;
+  const isTokenDocument = candidate.documentName === "Token" || candidate.constructor?.name === "TokenDocument";
+  return isTokenDocument ? candidate : null;
+}
+
+function resolveActor(actorLike) {
+  if (!actorLike) return null;
+  if (isActorDocument(actorLike)) return actorLike;
+  return actorLike.actor ?? null;
+}
+
+export function openManagerForActor(actor, tokenDocument = null) {
+  const resolvedActor = resolveActor(actor);
+  if (!resolvedActor || !resolvedActor.isOwner) return;
+
+  const app = new MultiTokenArtManager({ actor: resolvedActor, tokenDocument: resolveTokenDocument(tokenDocument) });
+  void app.render({ force: true });
 }
 
 function openManagerForTokenLike(tokenLike) {
   const tokenDocument = resolveTokenDocument(tokenLike);
   const actor = tokenDocument?.actor ?? tokenLike?.actor;
-  if (!actor || !actor.isOwner) return;
-
-  const app = new MultiTokenArtManager({ actor, tokenDocument });
-  void app.render({ force: true });
+  openManagerForActor(actor, tokenDocument);
 }
 
 function buildButtonConfig(tokenLike) {
@@ -102,9 +121,9 @@ function injectHudButtonFromTokenLike(tokenLike, element) {
     container = globalHud;
   }
 
-  // Try specific column divs first. Prioritize right column for tools.
-  let column = container.querySelector("div.col.right");
-  if (!column) column = container.querySelector("div.col.left");
+  // Try specific column divs first. Prioritize left column as requested.
+  let column = container.querySelector("div.col.left");
+  if (!column) column = container.querySelector("div.col.right");
 
   // Basic fallback to any col div but verify it's a div
   if (!column) column = container.querySelector("div.col");

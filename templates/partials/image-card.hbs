@@ -2,6 +2,7 @@
   data-image-type="{{imageType}}" data-index="{{idx}}">
   <div class="mta-card-clickable" data-action="select-image">
     <img src="{{src}}" alt="{{imageType}} image {{idx}}" />
+    <span class="mta-order-badge">{{order}}</span>
     {{#if active}}<span class="mta-active-dot"></span>{{/if}}
     {{#if isDefault}}<small class="mta-default-label">default</small>{{/if}}
   </div>

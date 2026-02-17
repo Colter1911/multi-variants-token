@@ -7,15 +7,23 @@
   <div class="mta-body">
     <section class="mta-library-zone">
       <div class="mta-section" data-image-type="token">
-        <div class="mta-section-header">
-          <h3>{{localize "MTA.TokenSection"}}</h3>
-          <label class="mta-autorotate"><input type="checkbox" name="autoRotate" data-action="toggle-global" {{checked
-              global.autoRotate}} />{{localize "MTA.AutoRotate"}}</label>
-          <div class="mta-control-group">
-            <label><input type="checkbox" name="tokenRandom" data-action="toggle-global" {{checked
-                global.tokenRandom}} />{{localize "MTA.Random"}}</label>
+        <div class="mta-section-header mta-token-header">
+          <div class="mta-token-header-left">
+            <h3>{{localize "MTA.TokenSection"}}</h3>
+            <div class="mta-token-checkboxes">
+              <label class="mta-token-random"><input type="checkbox" name="tokenRandom" data-action="toggle-global"
+                  {{checked global.tokenRandom}} />{{localize "MTA.Random"}}</label>
+              <label class="mta-token-link"><input type="checkbox" name="linkTokenPortrait" data-action="toggle-global"
+                  {{checked global.linkTokenPortrait}} />{{localize "MTA.LinkTokenPortrait"}}</label>
+              <label class="mta-autorotate mta-token-autorotate"><input type="checkbox" name="autoRotate"
+                  data-action="toggle-global" {{checked global.autoRotate}} />{{localize "MTA.AutoRotate"}}</label>
+            </div>
+          </div>
+          <div class="mta-control-group mta-token-header-actions">
             <button type="button" data-action="refresh-random" data-image-type="token">{{localize
               "MTA.PickRandom"}}</button>
+            <button type="button" data-action="create-token-for-all" data-image-type="token">{{localize
+              "MTA.CreateAutoTokenForAll"}}</button>
           </div>
         </div>
         <div class="mta-grid">
@@ -34,13 +42,17 @@
       </div>
 
       <div class="mta-section" data-image-type="portrait">
-        <div class="mta-section-header">
-          <h3>{{localize "MTA.PortraitSection"}}</h3>
-          <div class="mta-control-group">
-            <label><input type="checkbox" name="portraitRandom" data-action="toggle-global" {{checked
-                global.portraitRandom}} />{{localize "MTA.Random"}}</label>
+        <div class="mta-section-header mta-portrait-header">
+          <div class="mta-portrait-header-left">
+            <h3>{{localize "MTA.PortraitSection"}}</h3>
+            <label class="mta-portrait-random"><input type="checkbox" name="portraitRandom" data-action="toggle-global"
+                {{checked global.portraitRandom}} />{{localize "MTA.Random"}}</label>
+          </div>
+          <div class="mta-control-group mta-portrait-header-actions">
             <button type="button" data-action="refresh-random" data-image-type="portrait">{{localize
               "MTA.PickRandom"}}</button>
+            <button type="button" data-action="create-token-for-all" data-image-type="portrait">{{localize
+              "MTA.CreateAutoTokenForAll"}}</button>
           </div>
         </div>
         <div class="mta-grid">
@@ -58,12 +70,13 @@
       </div>
     </section>
 
-    {{#if activeSettings}}
-    {{> "modules/multi-tokenart/templates/settings-panel.hbs" activeSettings}}
-    {{else}}
-    <aside class="mta-settings-placeholder">
-      <p>{{localize "MTA.PlaceholderSettings"}}</p>
+    <aside class="mta-settings-slot">
+      <div class="mta-settings-placeholder {{#if activeSettings}}is-hidden{{/if}}">
+        <p>{{localize "MTA.PlaceholderSettings"}}</p>
+      </div>
+      {{#if activeSettings}}
+      {{> "modules/multi-tokenart/templates/settings-panel.hbs" activeSettings}}
+      {{/if}}
     </aside>
-    {{/if}}
   </div>
 </section>

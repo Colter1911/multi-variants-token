@@ -12,7 +12,8 @@ export class ModuleData extends foundry.abstract.DataModel {
       global: new fields.SchemaField({
         autoRotate: new fields.BooleanField({ required: true, initial: true }),
         tokenRandom: new fields.BooleanField({ required: true, initial: false }),
-        portraitRandom: new fields.BooleanField({ required: true, initial: false })
+        portraitRandom: new fields.BooleanField({ required: true, initial: false }),
+        linkTokenPortrait: new fields.BooleanField({ required: true, initial: false })
       }),
       tokenImages: new fields.ArrayField(new fields.EmbeddedDataField(ImageData)),
       portraitImages: new fields.ArrayField(new fields.EmbeddedDataField(ImageData))

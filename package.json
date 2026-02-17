@@ -4,6 +4,7 @@
   "description": "Foundry VTT v13 module scaffold for managing multiple token and portrait images.",
   "main": "index.js",
   "scripts": {
+    "build": "node --check scripts/module.mjs && node --check scripts/constants.mjs && node --check scripts/settings.mjs && node --check scripts/apps/MultiTokenArtManager.mjs && node --check scripts/apps/SettingsPanel.mjs && node --check scripts/ui/TokenHUD.mjs && node --check scripts/ui/DragDrop.mjs && node --check scripts/logic/AutoActivation.mjs && node --check scripts/logic/AutoRotate.mjs && node --check scripts/logic/AutoTokenService.mjs && node --check scripts/logic/DynamicRing.mjs && node --check scripts/logic/RandomMode.mjs && node --check scripts/utils/file-utils.mjs && node --check scripts/utils/flag-utils.mjs && node --check scripts/utils/hp-resolver.mjs && node --check scripts/data/ImageData.mjs && node --check scripts/data/ModuleData.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

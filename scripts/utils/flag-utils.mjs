@@ -6,7 +6,8 @@ const DEFAULT_MODULE_DATA = {
   global: {
     autoRotate: true,
     tokenRandom: false,
-    portraitRandom: false
+    portraitRandom: false,
+    linkTokenPortrait: false
   },
   tokenImages: [],
   portraitImages: []

@@ -1,11 +1,13 @@
 import { MODULE_ID, TOKEN_FLAG_KEYS } from "./constants.mjs";
 import { registerSettings, applySystemPresetIfNeeded } from "./settings.mjs";
-import { registerTokenHudButton, openManagerForTokenDocument } from "./ui/TokenHUD.mjs";
+import { registerTokenHudButton, openManagerForTokenDocument, openManagerForActor } from "./ui/TokenHUD.mjs";
 import { runAutoActivation, applyTokenImageById, applyPortraitById } from "./logic/AutoActivation.mjs";
 import { pickRandomImage } from "./logic/RandomMode.mjs";
 import { getActorModuleData } from "./utils/flag-utils.mjs";
 
 console.log("✅ Multi Token Art | module.mjs loaded");
+
+const ACTOR_SHEET_BUTTON_CLASS = `${MODULE_ID}-open-manager-sheet-button`;
 
 function openManagerForControlledToken() {
   const controlled = canvas?.tokens?.controlled?.[0]?.document ?? null;
@@ -17,6 +19,67 @@ function openManagerForControlledToken() {
   openManagerForTokenDocument(controlled);
 }
 
+function openManagerForActorById(actorId) {
+  const actor = game.actors?.get(actorId) ?? null;
+  if (!actor) {
+    ui.notifications.warn("Actor not found.");
+    return;
+  }
+
+  openManagerForActor(actor);
+}
+
+function resolveActorFromSheet(sheet) {
+  return sheet?.actor ?? sheet?.document ?? sheet?.object ?? null;
+}
+
+function resolveTokenDocumentFromSheet(sheet) {
+  return sheet?.token?.document ?? sheet?.token ?? null;
+}
+
+function pushActorSheetHeaderControl(sheetLike, controls) {
+  const actor = resolveActorFromSheet(sheetLike);
+  if (!actor || !actor.isOwner || !Array.isArray(controls)) return;
+
+  const actionId = `${MODULE_ID}.open-manager`;
+  const localized = game.i18n.localize("MTA.OpenManager");
+
+  if (controls.some((control) =>
+    control?.action === actionId
+    || control?.class === ACTOR_SHEET_BUTTON_CLASS
+    || control?.label === localized
+    || control?.title === localized
+  )) {
+    return;
+  }
+
+  const tokenDocument = resolveTokenDocumentFromSheet(sheetLike);
+
+  controls.unshift({
+    action: actionId,
+    class: ACTOR_SHEET_BUTTON_CLASS,
+    icon: "fas fa-masks-theater",
+    label: localized,
+    title: localized,
+    onClick: () => openManagerForActor(actor, tokenDocument),
+    onclick: () => openManagerForActor(actor, tokenDocument),
+    callback: () => openManagerForActor(actor, tokenDocument)
+  });
+}
+
+function registerActorHeaderButtons() {
+  for (const hookName of [
+    "getApplicationHeaderButtons",
+    "getActorSheetHeaderButtons",
+    "getApplicationV2HeaderButtons",
+    "getHeaderControlsApplicationV2"
+  ]) {
+    Hooks.on(hookName, (application, controls) => {
+      pushActorSheetHeaderControl(application, controls);
+    });
+  }
+}
+
 function setModuleApi() {
   const module = game.modules.get(MODULE_ID);
   if (!module) return;
@@ -24,15 +87,20 @@ function setModuleApi() {
   module.api = {
     runAutoActivation,
     openManagerForTokenDocument,
+    openManagerForActor,
+    openManagerForActorById,
     // Aliases for easier macro/debug usage.
     openManager: openManagerForTokenDocument,
-    openForControlledToken: openManagerForControlledToken
+    openForControlledToken: openManagerForControlledToken,
+    openForActor: openManagerForActor,
+    openForActorById: openManagerForActorById
   };
 }
 
 Hooks.once("init", async () => {
   registerSettings();
   registerTokenHudButton();
+  registerActorHeaderButtons();
   setModuleApi();
 
   await loadTemplates([
@@ -48,7 +116,9 @@ Hooks.once("ready", () => {
 
   globalThis.MultiTokenArtDebug = {
     openForControlledToken: openManagerForControlledToken,
-    openManagerForTokenDocument
+    openManagerForTokenDocument,
+    openManagerForActor,
+    openManagerForActorById
   };
 });
 
@@ -111,7 +181,9 @@ Hooks.on("createToken", (tokenDocument) => {
     : data.portraitImages.find((image) => image.isDefault) ?? null;
 
   if (initialTokenImage) void applyTokenImageById({ actor, tokenDocument, imageId: initialTokenImage.id });
-  if (initialPortraitImage) void applyPortraitById({ actor, tokenDocument, imageId: initialPortraitImage.id });
+  if (initialPortraitImage && !data.global.linkTokenPortrait) {
+    void applyPortraitById({ actor, tokenDocument, imageId: initialPortraitImage.id });
+  }
 
   void runAutoActivation({ actor, tokenDocument });
 });
