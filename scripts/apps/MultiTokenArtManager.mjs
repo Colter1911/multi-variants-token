@@ -1326,7 +1326,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       const imageHeight = state.image.naturalHeight || state.image.height;
       const tolerance = Math.max(0, Math.min(100, Number(state.edgeSnapTolerance ?? 50)));
 
-      const radius = 5;
+      const radius = 10;
       const threshold = 18 + ((100 - tolerance) * 0.8);
       let best = null;
 
