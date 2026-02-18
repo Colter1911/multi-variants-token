@@ -1326,7 +1326,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       const imageHeight = state.image.naturalHeight || state.image.height;
       const tolerance = Math.max(0, Math.min(100, Number(state.edgeSnapTolerance ?? 50)));
 
-      const radius = 10;
+      const radius = 5;
       const threshold = 18 + ((100 - tolerance) * 0.8);
       let best = null;
 
@@ -1395,8 +1395,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       });
     };
 
-    const MIN_STROKE_POINT_DISTANCE_PX = 5;
-    const MIN_POLYGON_AREA_PX = 20;
+    const MIN_STROKE_POINT_DISTANCE_PX = 2;
+    const MIN_POLYGON_AREA_PX = 5;
 
     const toSourcePointFromEvent = (event) => {
       if (!state.metrics) return null;
