@@ -1130,6 +1130,21 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       alphaClearBtn: null,
       edgeSnapEnabled: false,
       edgeSnapTolerance: 50,
+      edgeMap: null,
+      edgeGradX: null,
+      edgeGradY: null,
+      edgeColorData: null,
+      edgeMapWidth: 0,
+      edgeMapHeight: 0,
+      edgeMapMean: 0,
+      edgeMapStd: 0,
+      edgeMapMax: 0,
+      edgeMapP55: 0,
+      edgeMapP70: 0,
+      edgeMapP82: 0,
+      edgeMapP92: 0,
+      edgeSnapLastPoint: null,
+      edgeSnapLatched: false,
       alphaDrawEnabled: false,
       alphaCurrentStroke: null,
       alphaCurrentStrokeMode: "add",
@@ -1278,79 +1293,782 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       }
     };
 
-    const getEdgeStrengthAtPoint = (sourcePoint) => {
+    const ensureEdgeMap = () => {
       const image = state.image;
       const imageWidth = image.naturalWidth || image.width;
       const imageHeight = image.naturalHeight || image.height;
 
-      const x = Math.max(1, Math.min(imageWidth - 2, Math.round(sourcePoint.x)));
-      const y = Math.max(1, Math.min(imageHeight - 2, Math.round(sourcePoint.y)));
+      if (
+        state.edgeMap
+        && state.edgeGradX
+        && state.edgeGradY
+        && state.edgeColorData
+        && state.edgeMapWidth === imageWidth
+        && state.edgeMapHeight === imageHeight
+      ) {
+        return;
+      }
 
-      const probeSize = 3;
-      const probeCanvas = document.createElement("canvas");
-      probeCanvas.width = probeSize;
-      probeCanvas.height = probeSize;
-      const probeCtx = probeCanvas.getContext("2d", { willReadFrequently: true });
-      if (!probeCtx) return 0;
+      const edgeCanvas = document.createElement("canvas");
+      edgeCanvas.width = imageWidth;
+      edgeCanvas.height = imageHeight;
+      const edgeCtx = edgeCanvas.getContext("2d", { willReadFrequently: true });
+      if (!edgeCtx) {
+        state.edgeMap = null;
+        state.edgeGradX = null;
+        state.edgeGradY = null;
+        state.edgeColorData = null;
+        state.edgeMapWidth = 0;
+        state.edgeMapHeight = 0;
+        state.edgeMapMean = 0;
+        state.edgeMapStd = 0;
+        state.edgeMapMax = 0;
+        state.edgeMapP55 = 0;
+        state.edgeMapP70 = 0;
+        state.edgeMapP82 = 0;
+        state.edgeMapP92 = 0;
+        return;
+      }
 
-      const sx = x - 1;
-      const sy = y - 1;
-      probeCtx.drawImage(image, sx, sy, probeSize, probeSize, 0, 0, probeSize, probeSize);
-      const data = probeCtx.getImageData(0, 0, probeSize, probeSize).data;
+      edgeCtx.drawImage(image, 0, 0, imageWidth, imageHeight);
+      const src = edgeCtx.getImageData(0, 0, imageWidth, imageHeight);
+      const srcData = src.data;
+      const pixelCount = imageWidth * imageHeight;
 
-      const luminance = (idx) => {
-        const r = data[idx];
-        const g = data[idx + 1];
-        const b = data[idx + 2];
-        return (0.299 * r) + (0.587 * g) + (0.114 * b);
+      const luminance = new Float32Array(pixelCount);
+      for (let i = 0; i < pixelCount; i++) {
+        const base = i * 4;
+        luminance[i] = (0.299 * srcData[base]) + (0.587 * srcData[base + 1]) + (0.114 * srcData[base + 2]);
+      }
+
+      const blurAxis = (input, width, height, horizontal) => {
+        const output = new Float32Array(input.length);
+        const kernel = [1, 4, 6, 4, 1];
+        const kernelWeight = 16;
+
+        if (horizontal) {
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              let sum = 0;
+              for (let k = -2; k <= 2; k++) {
+                const sx = Math.max(0, Math.min(width - 1, x + k));
+                sum += input[(y * width) + sx] * kernel[k + 2];
+              }
+              output[(y * width) + x] = sum / kernelWeight;
+            }
+          }
+        } else {
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              let sum = 0;
+              for (let k = -2; k <= 2; k++) {
+                const sy = Math.max(0, Math.min(height - 1, y + k));
+                sum += input[(sy * width) + x] * kernel[k + 2];
+              }
+              output[(y * width) + x] = sum / kernelWeight;
+            }
+          }
+        }
+
+        return output;
       };
 
-      const c = luminance((1 * probeSize + 1) * 4);
-      const l = luminance((1 * probeSize + 0) * 4);
-      const r = luminance((1 * probeSize + 2) * 4);
-      const u = luminance((0 * probeSize + 1) * 4);
-      const d = luminance((2 * probeSize + 1) * 4);
+      const luminanceBlurred = blurAxis(blurAxis(luminance, imageWidth, imageHeight, true), imageWidth, imageHeight, false);
+      const edgeMap = new Float32Array(pixelCount);
+      const gradXMap = new Float32Array(pixelCount);
+      const gradYMap = new Float32Array(pixelCount);
+      let sum = 0;
+      let sumSq = 0;
+      let count = 0;
+      let maxMagnitude = 0;
 
-      const gx = r - l;
-      const gy = d - u;
-      const centerContrast = Math.max(Math.abs(c - l), Math.abs(c - r), Math.abs(c - u), Math.abs(c - d));
+      const lumAt = (x, y) => luminanceBlurred[(y * imageWidth) + x];
+      const channelAt = (x, y, channel) => srcData[(((y * imageWidth) + x) * 4) + channel];
 
-      return Math.sqrt((gx * gx) + (gy * gy)) + (centerContrast * 0.35);
-    };
+      for (let y = 1; y < (imageHeight - 1); y++) {
+        for (let x = 1; x < (imageWidth - 1); x++) {
+          const tl = lumAt(x - 1, y - 1);
+          const tc = lumAt(x, y - 1);
+          const tr = lumAt(x + 1, y - 1);
+          const ml = lumAt(x - 1, y);
+          const mr = lumAt(x + 1, y);
+          const bl = lumAt(x - 1, y + 1);
+          const bc = lumAt(x, y + 1);
+          const br = lumAt(x + 1, y + 1);
 
-    const snapPointToEdge = (sourcePoint) => {
-      if (!sourcePoint) return sourcePoint;
-      if (!state.edgeSnapEnabled) return sourcePoint;
+          const gx = (-1 * tl) + (1 * tr)
+            + (-2 * ml) + (2 * mr)
+            + (-1 * bl) + (1 * br);
+          const gy = (-1 * tl) + (-2 * tc) + (-1 * tr)
+            + (1 * bl) + (2 * bc) + (1 * br);
 
-      const imageWidth = state.image.naturalWidth || state.image.width;
-      const imageHeight = state.image.naturalHeight || state.image.height;
-      const tolerance = Math.max(0, Math.min(100, Number(state.edgeSnapTolerance ?? 50)));
+          const rDx = channelAt(x + 1, y, 0) - channelAt(x - 1, y, 0);
+          const rDy = channelAt(x, y + 1, 0) - channelAt(x, y - 1, 0);
+          const gDx = channelAt(x + 1, y, 1) - channelAt(x - 1, y, 1);
+          const gDy = channelAt(x, y + 1, 1) - channelAt(x, y - 1, 1);
+          const bDx = channelAt(x + 1, y, 2) - channelAt(x - 1, y, 2);
+          const bDy = channelAt(x, y + 1, 2) - channelAt(x, y - 1, 2);
 
-      const radius = 10;
-      const threshold = 18 + ((100 - tolerance) * 0.8);
-      let best = null;
+          const lumMagnitude = Math.sqrt((gx * gx) + (gy * gy));
+          const colorMagnitude = Math.sqrt(
+            (rDx * rDx) + (rDy * rDy)
+            + (gDx * gDx) + (gDy * gDy)
+            + (bDx * bDx) + (bDy * bDy)
+          ) / Math.sqrt(3);
 
-      for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
-          const distance = Math.sqrt((dx * dx) + (dy * dy));
-          if (distance > radius) continue;
-
-          const px = sourcePoint.x + dx;
-          const py = sourcePoint.y + dy;
-          if (px <= 1 || py <= 1 || px >= (imageWidth - 2) || py >= (imageHeight - 2)) continue;
-
-          const strength = getEdgeStrengthAtPoint({ x: px, y: py });
-          if (!Number.isFinite(strength) || strength < threshold) continue;
-
-          const score = strength - (distance * 4.5);
-          if (!best || score > best.score) {
-            best = { x: px, y: py, score };
-          }
+          const magnitude = (lumMagnitude * 0.52) + (colorMagnitude * 0.48);
+          const idx = (y * imageWidth) + x;
+          edgeMap[idx] = magnitude;
+          gradXMap[idx] = gx;
+          gradYMap[idx] = gy;
+          sum += magnitude;
+          sumSq += (magnitude * magnitude);
+          count += 1;
+          if (magnitude > maxMagnitude) maxMagnitude = magnitude;
         }
       }
 
-      if (!best) return sourcePoint;
-      return { x: best.x, y: best.y };
+      const mean = count > 0 ? (sum / count) : 0;
+      const variance = count > 0 ? Math.max(0, (sumSq / count) - (mean * mean)) : 0;
+      const std = Math.sqrt(variance);
+
+      const histogram = new Uint32Array(512);
+      let positiveCount = 0;
+      if (maxMagnitude > 0) {
+        for (let i = 0; i < edgeMap.length; i++) {
+          const value = edgeMap[i];
+          if (value <= 0) continue;
+          const bucket = Math.max(0, Math.min(histogram.length - 1, Math.floor((value / maxMagnitude) * (histogram.length - 1))));
+          histogram[bucket] += 1;
+          positiveCount += 1;
+        }
+      }
+
+      const percentileFromHistogram = (percentile) => {
+        if (positiveCount <= 0 || maxMagnitude <= 0) return 0;
+        const thresholdCount = Math.max(1, Math.ceil(positiveCount * percentile));
+        let cumulative = 0;
+        for (let i = 0; i < histogram.length; i++) {
+          cumulative += histogram[i];
+          if (cumulative >= thresholdCount) {
+            return (i / (histogram.length - 1)) * maxMagnitude;
+          }
+        }
+        return maxMagnitude;
+      };
+
+      state.edgeMap = edgeMap;
+      state.edgeGradX = gradXMap;
+      state.edgeGradY = gradYMap;
+      state.edgeColorData = new Uint8ClampedArray(srcData);
+      state.edgeMapWidth = imageWidth;
+      state.edgeMapHeight = imageHeight;
+      state.edgeMapMean = mean;
+      state.edgeMapStd = std;
+      state.edgeMapMax = maxMagnitude;
+      state.edgeMapP55 = percentileFromHistogram(0.55);
+      state.edgeMapP70 = percentileFromHistogram(0.70);
+      state.edgeMapP82 = percentileFromHistogram(0.82);
+      state.edgeMapP92 = percentileFromHistogram(0.92);
+
+      const normalizeByPercentile = (value, low, high) => {
+        if (!Number.isFinite(value)) return 0;
+        if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) {
+          return value > 0 ? 1 : 0;
+        }
+        return Math.max(0, Math.min(1, (value - low) / (high - low)));
+      };
+
+      for (let i = 0; i < edgeMap.length; i++) {
+        edgeMap[i] = normalizeByPercentile(edgeMap[i], state.edgeMapP55, state.edgeMapP92);
+      }
+    };
+
+    const sampleMapBilinear = (map, width, height, x, y) => {
+      if (!map || width < 1 || height < 1) return 0;
+      const safeX = Math.max(0, Math.min(width - 1.0001, x));
+      const safeY = Math.max(0, Math.min(height - 1.0001, y));
+
+      const x0 = Math.floor(safeX);
+      const y0 = Math.floor(safeY);
+      const x1 = Math.min(width - 1, x0 + 1);
+      const y1 = Math.min(height - 1, y0 + 1);
+
+      const tx = safeX - x0;
+      const ty = safeY - y0;
+
+      const i00 = (y0 * width) + x0;
+      const i10 = (y0 * width) + x1;
+      const i01 = (y1 * width) + x0;
+      const i11 = (y1 * width) + x1;
+
+      const a = map[i00] * (1 - tx) + (map[i10] * tx);
+      const b = map[i01] * (1 - tx) + (map[i11] * tx);
+      return a * (1 - ty) + (b * ty);
+    };
+
+    const edgeStrengthAt = (x, y) => {
+      if (!state.edgeMap) return 0;
+      return sampleMapBilinear(state.edgeMap, state.edgeMapWidth, state.edgeMapHeight, x, y);
+    };
+
+    const edgeGradientAt = (x, y) => {
+      if (!state.edgeGradX || !state.edgeGradY) return { gx: 0, gy: 0 };
+      return {
+        gx: sampleMapBilinear(state.edgeGradX, state.edgeMapWidth, state.edgeMapHeight, x, y),
+        gy: sampleMapBilinear(state.edgeGradY, state.edgeMapWidth, state.edgeMapHeight, x, y)
+      };
+    };
+
+    const sampleColorAt = (x, y) => {
+      const data = state.edgeColorData;
+      const width = state.edgeMapWidth;
+      const height = state.edgeMapHeight;
+      if (!data || width < 1 || height < 1) return { r: 0, g: 0, b: 0 };
+
+      const cx = Math.max(0, Math.min(width - 1, Math.round(x)));
+      const cy = Math.max(0, Math.min(height - 1, Math.round(y)));
+      const idx = ((cy * width) + cx) * 4;
+      return {
+        r: data[idx],
+        g: data[idx + 1],
+        b: data[idx + 2]
+      };
+    };
+
+    const colorContrastAcrossNormal = (x, y, normal, tangent) => {
+      const probeDistance = 2.6;
+      const tangentSpread = 1.25;
+      let posR = 0;
+      let posG = 0;
+      let posB = 0;
+      let negR = 0;
+      let negG = 0;
+      let negB = 0;
+      let sampleCount = 0;
+
+      for (let k = -1; k <= 1; k++) {
+        const tx = tangent.x * k * tangentSpread;
+        const ty = tangent.y * k * tangentSpread;
+        const positive = sampleColorAt(x + tx + (normal.x * probeDistance), y + ty + (normal.y * probeDistance));
+        const negative = sampleColorAt(x + tx - (normal.x * probeDistance), y + ty - (normal.y * probeDistance));
+
+        posR += positive.r;
+        posG += positive.g;
+        posB += positive.b;
+        negR += negative.r;
+        negG += negative.g;
+        negB += negative.b;
+        sampleCount += 1;
+      }
+
+      if (sampleCount <= 0) return 0;
+      const avgPosR = posR / sampleCount;
+      const avgPosG = posG / sampleCount;
+      const avgPosB = posB / sampleCount;
+      const avgNegR = negR / sampleCount;
+      const avgNegG = negG / sampleCount;
+      const avgNegB = negB / sampleCount;
+      const distance = Math.sqrt(
+        ((avgPosR - avgNegR) ** 2)
+        + ((avgPosG - avgNegG) ** 2)
+        + ((avgPosB - avgNegB) ** 2)
+      );
+      return distance / 255;
+    };
+
+    const normalizeVector = (x, y, fallback = { x: 1, y: 0 }) => {
+      const len = Math.sqrt((x * x) + (y * y));
+      if (len < 0.0001) return { x: fallback.x, y: fallback.y };
+      return { x: x / len, y: y / len };
+    };
+
+    const isStrokeClosed = (points) => {
+      if (!Array.isArray(points) || points.length < 4) return false;
+      const first = points[0];
+      const last = points[points.length - 1];
+      const distance = Math.sqrt(((last.x - first.x) ** 2) + ((last.y - first.y) ** 2));
+      return distance <= 14;
+    };
+
+    const resampleStroke = (points, stepPx = 1.25, maxPoints = 2400) => {
+      if (!Array.isArray(points) || points.length < 2) {
+        return Array.isArray(points) ? points.map((point) => ({ x: point.x, y: point.y })) : [];
+      }
+
+      const output = [{ x: points[0].x, y: points[0].y }];
+      for (let i = 1; i < points.length; i++) {
+        const prev = points[i - 1];
+        const curr = points[i];
+        const dx = curr.x - prev.x;
+        const dy = curr.y - prev.y;
+        const segLen = Math.sqrt((dx * dx) + (dy * dy));
+        if (segLen < 0.0001) continue;
+
+        const ux = dx / segLen;
+        const uy = dy / segLen;
+        for (let d = stepPx; d < segLen; d += stepPx) {
+          output.push({ x: prev.x + (ux * d), y: prev.y + (uy * d) });
+        }
+        output.push({ x: curr.x, y: curr.y });
+      }
+
+      if (output.length <= maxPoints) return output;
+
+      const stride = Math.max(2, Math.ceil(output.length / maxPoints));
+      const compact = [];
+      for (let i = 0; i < output.length; i += stride) {
+        compact.push(output[i]);
+      }
+      const last = output[output.length - 1];
+      const lastCompact = compact[compact.length - 1];
+      if (!lastCompact || lastCompact.x !== last.x || lastCompact.y !== last.y) {
+        compact.push(last);
+      }
+      return compact;
+    };
+
+    const computeTangentsAndNormals = (points, { closed = false } = {}) => {
+      const tangents = [];
+      const normals = [];
+
+      for (let i = 0; i < points.length; i++) {
+        const prevIndex = closed ? ((i - 1 + points.length) % points.length) : Math.max(0, i - 1);
+        const nextIndex = closed ? ((i + 1) % points.length) : Math.min(points.length - 1, i + 1);
+        const prev = points[prevIndex];
+        const next = points[nextIndex];
+        const fallback = tangents[i - 1] ?? { x: 1, y: 0 };
+        const tangent = normalizeVector(next.x - prev.x, next.y - prev.y, fallback);
+        tangents.push(tangent);
+        normals.push({ x: -tangent.y, y: tangent.x });
+      }
+
+      return { tangents, normals };
+    };
+
+    const buildEdgeSnapThresholds = () => {
+      const tolerance = Math.max(0, Math.min(100, Number(state.edgeSnapTolerance ?? 50)));
+      const t = tolerance / 100;
+      const strictness = 1 - t;
+      const edgeFloor = 0.72 - (t * 0.64);
+
+      return {
+        resampleStep: 1.15,
+        radius: Math.round(12 + (t * 34)),
+        tangentRadius: Math.round(2 + (t * 9)),
+        candidateLimit: Math.round(11 + (t * 8)),
+        edgeFloor: Math.max(0.04, Math.min(0.92, edgeFloor)),
+        contrastFloor: 0.06 - (t * 0.025),
+        edgeWeight: 116,
+        contrastWeight: 86,
+        alignmentWeight: 24,
+        normalPenalty: 1.25 + (strictness * 1.35),
+        tangentPenalty: 1.7 + (strictness * 1.6),
+        anchorPenalty: 0.72 + (strictness * 0.52),
+        transitionPenalty: 2.9 + (strictness * 2.1),
+        orthogonalPenalty: 5.4 + (strictness * 3.6),
+        longJumpPenalty: 7.0 + (strictness * 3.5),
+        sideJumpPenalty: 7.8 + (strictness * 4.2),
+        maxNormalOffset: 6.5 + (t * 13.5),
+        boundaryPinBand: 0,
+        boundaryPinScore: 0,
+        maxOutsideAllowance: Number.POSITIVE_INFINITY,
+        maxExpectedStepScale: 3.0 + (t * 2.7),
+        smoothingPasses: 2 + Math.round(t * 2),
+        minPointDistanceAfterRefine: 0.75
+      };
+    };
+
+    const collectCandidatesForPoint = ({
+      point,
+      anchorPoint,
+      tangent,
+      normal,
+      thresholds,
+      localRadiusScale = 1,
+      localTangentialScale = 1
+    }) => {
+      if (!point || !anchorPoint || !tangent || !normal) return [];
+
+      const imageWidth = state.edgeMapWidth;
+      const imageHeight = state.edgeMapHeight;
+      const radius = Math.max(2, Math.round(thresholds.radius * localRadiusScale));
+      const tangentRadius = Math.max(1, Math.round(thresholds.tangentRadius * localTangentialScale));
+
+      const all = [];
+
+      for (let dt = -tangentRadius; dt <= tangentRadius; dt++) {
+        const tx = tangent.x * dt;
+        const ty = tangent.y * dt;
+
+        for (let dn = -radius; dn <= radius; dn++) {
+          const px = point.x + tx + (normal.x * dn);
+          const py = point.y + ty + (normal.y * dn);
+
+          if (px <= 1 || py <= 1 || px >= (imageWidth - 2) || py >= (imageHeight - 2)) continue;
+
+          const edgeStrength = edgeStrengthAt(px, py);
+          const contrast = colorContrastAcrossNormal(px, py, normal, tangent);
+          if (edgeStrength < thresholds.edgeFloor && contrast < thresholds.contrastFloor) continue;
+
+          const gradient = edgeGradientAt(px, py);
+          const gradientLen = Math.sqrt((gradient.gx * gradient.gx) + (gradient.gy * gradient.gy));
+          const alignment = gradientLen > 0.0001
+            ? Math.abs(((gradient.gx / gradientLen) * normal.x) + ((gradient.gy / gradientLen) * normal.y))
+            : 0;
+
+          const anchorDistance = Math.sqrt(((px - anchorPoint.x) ** 2) + ((py - anchorPoint.y) ** 2));
+
+          all.push({
+            x: px,
+            y: py,
+            edgeStrength,
+            contrast,
+            alignment,
+            dnAbs: Math.abs(dn),
+            dtAbs: Math.abs(dt),
+            anchorDistance,
+            isFallback: false
+          });
+        }
+      }
+
+      const fallbackEdge = edgeStrengthAt(anchorPoint.x, anchorPoint.y);
+      const fallbackContrast = colorContrastAcrossNormal(anchorPoint.x, anchorPoint.y, normal, tangent);
+      all.push({
+        x: anchorPoint.x,
+        y: anchorPoint.y,
+        edgeStrength: fallbackEdge,
+        contrast: fallbackContrast,
+        alignment: 0,
+        dnAbs: 0,
+        dtAbs: 0,
+        anchorDistance: 0,
+        isFallback: true
+      });
+
+      let minEdge = Number.POSITIVE_INFINITY;
+      let maxEdge = Number.NEGATIVE_INFINITY;
+      let minContrast = Number.POSITIVE_INFINITY;
+      let maxContrast = Number.NEGATIVE_INFINITY;
+
+      for (const candidate of all) {
+        if (candidate.edgeStrength < minEdge) minEdge = candidate.edgeStrength;
+        if (candidate.edgeStrength > maxEdge) maxEdge = candidate.edgeStrength;
+        if (candidate.contrast < minContrast) minContrast = candidate.contrast;
+        if (candidate.contrast > maxContrast) maxContrast = candidate.contrast;
+      }
+
+      const normalizeRange = (value, minValue, maxValue) => {
+        if (!Number.isFinite(value)) return 0;
+        if (!Number.isFinite(minValue) || !Number.isFinite(maxValue) || maxValue <= minValue) {
+          return value > 0 ? 1 : 0;
+        }
+        return Math.max(0, Math.min(1, (value - minValue) / (maxValue - minValue)));
+      };
+
+      for (const candidate of all) {
+        const localEdge = normalizeRange(candidate.edgeStrength, minEdge, maxEdge);
+        const localContrast = normalizeRange(candidate.contrast, minContrast, maxContrast);
+        const score = (localEdge * thresholds.edgeWeight)
+          + (localContrast * thresholds.contrastWeight)
+          + (candidate.alignment * thresholds.alignmentWeight)
+          - (candidate.dnAbs * thresholds.normalPenalty)
+          - (candidate.dtAbs * thresholds.tangentPenalty)
+          - (candidate.anchorDistance * thresholds.anchorPenalty);
+
+        candidate.score = candidate.isFallback ? (score * 0.94) : score;
+      }
+
+      all.sort((a, b) => b.score - a.score);
+      const selected = [];
+      for (const candidate of all) {
+        if (selected.length >= thresholds.candidateLimit) break;
+
+        const duplicate = selected.some((existing) => {
+          const dx = existing.x - candidate.x;
+          const dy = existing.y - candidate.y;
+          return ((dx * dx) + (dy * dy)) < 0.36;
+        });
+
+        if (!duplicate) {
+          selected.push({
+            x: candidate.x,
+            y: candidate.y,
+            score: candidate.score
+          });
+        }
+      }
+
+      return selected;
+    };
+
+    const optimizeCandidatePath = (candidateSets, anchors, tangents, normals, thresholds) => {
+      if (!Array.isArray(candidateSets) || candidateSets.length === 0) return [];
+
+      let prevScores = candidateSets[0].map((candidate) => candidate.score);
+      const backRefs = Array.from({ length: candidateSets.length }, () => []);
+      backRefs[0] = candidateSets[0].map(() => -1);
+
+      for (let i = 1; i < candidateSets.length; i++) {
+        const prevCandidates = candidateSets[i - 1];
+        const currCandidates = candidateSets[i];
+        const tangent = tangents[i] ?? { x: 1, y: 0 };
+        const normal = normals[i] ?? { x: 0, y: 1 };
+        const expectedStep = Math.max(0.5, Math.sqrt(
+          ((anchors[i].x - anchors[i - 1].x) ** 2)
+          + ((anchors[i].y - anchors[i - 1].y) ** 2)
+        ));
+        const maxStep = expectedStep * thresholds.maxExpectedStepScale;
+
+        const currScores = new Array(currCandidates.length).fill(Number.NEGATIVE_INFINITY);
+        const currBackRefs = new Array(currCandidates.length).fill(0);
+
+        for (let j = 0; j < currCandidates.length; j++) {
+          const candidate = currCandidates[j];
+          let bestScore = Number.NEGATIVE_INFINITY;
+          let bestPrevIndex = 0;
+
+          for (let k = 0; k < prevCandidates.length; k++) {
+            const prev = prevCandidates[k];
+            const moveX = candidate.x - prev.x;
+            const moveY = candidate.y - prev.y;
+            const jumpDistance = Math.sqrt((moveX * moveX) + (moveY * moveY));
+            const alongTangent = Math.abs((moveX * tangent.x) + (moveY * tangent.y));
+            const acrossNormal = Math.abs((moveX * normal.x) + (moveY * normal.y));
+            const prevOffsetN = ((prev.x - anchors[i - 1].x) * normal.x) + ((prev.y - anchors[i - 1].y) * normal.y);
+            const currOffsetN = ((candidate.x - anchors[i].x) * normal.x) + ((candidate.y - anchors[i].y) * normal.y);
+            const sideDelta = Math.abs(currOffsetN - prevOffsetN);
+
+            const continuityPenalty = Math.abs(jumpDistance - expectedStep) * thresholds.transitionPenalty;
+            const orthogonalPenalty = acrossNormal * thresholds.orthogonalPenalty;
+            const longJumpPenalty = Math.max(0, jumpDistance - maxStep) * thresholds.longJumpPenalty;
+            const shortStepPenalty = Math.max(0, (expectedStep * 0.24) - alongTangent) * thresholds.transitionPenalty;
+            const sideJumpPenalty = sideDelta * thresholds.sideJumpPenalty;
+
+            if (Math.abs(currOffsetN) > thresholds.maxNormalOffset) {
+              continue;
+            }
+
+            const score = prevScores[k]
+              + candidate.score
+              - continuityPenalty
+              - orthogonalPenalty
+              - longJumpPenalty
+              - shortStepPenalty
+              - sideJumpPenalty;
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestPrevIndex = k;
+            }
+          }
+
+          currScores[j] = bestScore;
+          currBackRefs[j] = bestPrevIndex;
+        }
+
+        prevScores = currScores;
+        backRefs[i] = currBackRefs;
+      }
+
+      let finalIndex = 0;
+      let finalScore = Number.NEGATIVE_INFINITY;
+      for (let i = 0; i < prevScores.length; i++) {
+        if (prevScores[i] > finalScore) {
+          finalScore = prevScores[i];
+          finalIndex = i;
+        }
+      }
+
+      const refined = new Array(candidateSets.length);
+      let cursor = finalIndex;
+
+      for (let i = candidateSets.length - 1; i >= 0; i--) {
+        const candidate = candidateSets[i][cursor] ?? candidateSets[i][0];
+        refined[i] = { x: candidate.x, y: candidate.y };
+        const prevCursor = backRefs[i]?.[cursor];
+        cursor = Number.isInteger(prevCursor) && prevCursor >= 0 ? prevCursor : 0;
+      }
+
+      return refined;
+    };
+
+    const smoothPath = (points, passes = 2, { closed = false } = {}) => {
+      if (!Array.isArray(points) || points.length < 3) {
+        return Array.isArray(points) ? points.map((point) => ({ x: point.x, y: point.y })) : [];
+      }
+
+      let output = points.map((point) => ({ x: point.x, y: point.y }));
+      for (let pass = 0; pass < passes; pass++) {
+        const next = output.map((point, index) => {
+          if (!closed && (index === 0 || index === output.length - 1)) {
+            return { x: point.x, y: point.y };
+          }
+
+          const prev = output[(index - 1 + output.length) % output.length];
+          const curr = output[index];
+          const after = output[(index + 1) % output.length];
+          return {
+            x: (prev.x * 0.22) + (curr.x * 0.56) + (after.x * 0.22),
+            y: (prev.y * 0.22) + (curr.y * 0.56) + (after.y * 0.22)
+          };
+        });
+        output = next;
+      }
+
+      return output;
+    };
+
+    const polishPathToEdges = (points, thresholds, { closed = false } = {}) => {
+      if (!Array.isArray(points) || points.length < 3) {
+        return Array.isArray(points) ? points.map((point) => ({ x: point.x, y: point.y })) : [];
+      }
+
+      const { tangents, normals } = computeTangentsAndNormals(points, { closed });
+      const polished = [];
+
+      for (let i = 0; i < points.length; i++) {
+        const anchor = points[i];
+        const candidates = collectCandidatesForPoint({
+          point: anchor,
+          anchorPoint: anchor,
+          tangent: tangents[i],
+          normal: normals[i],
+          thresholds,
+          localRadiusScale: 0.35,
+          localTangentialScale: 0.45
+        });
+
+        if (candidates.length === 0) {
+          polished.push({ x: anchor.x, y: anchor.y });
+          continue;
+        }
+
+        let best = candidates[0];
+        let bestScore = Number.NEGATIVE_INFINITY;
+        for (const candidate of candidates) {
+          const distance = Math.sqrt(((candidate.x - anchor.x) ** 2) + ((candidate.y - anchor.y) ** 2));
+          const score = candidate.score - (distance * (thresholds.anchorPenalty + 1.8));
+          if (score > bestScore) {
+            bestScore = score;
+            best = candidate;
+          }
+        }
+
+        polished.push({ x: best.x, y: best.y });
+      }
+
+      return polished;
+    };
+
+    const simplifyPath = (points, minDistance = 0.8) => {
+      if (!Array.isArray(points) || points.length < 3) return points ?? [];
+      const minDistanceSq = minDistance * minDistance;
+
+      const simplified = [{ x: points[0].x, y: points[0].y }];
+      for (let i = 1; i < points.length - 1; i++) {
+        const prev = simplified[simplified.length - 1];
+        const curr = points[i];
+        const dx = curr.x - prev.x;
+        const dy = curr.y - prev.y;
+        if ((dx * dx) + (dy * dy) >= minDistanceSq) {
+          simplified.push({ x: curr.x, y: curr.y });
+        }
+      }
+      const last = points[points.length - 1];
+      simplified.push({ x: last.x, y: last.y });
+      return simplified;
+    };
+
+    const averageEdgeStrength = (points) => {
+      if (!Array.isArray(points) || points.length === 0) return 0;
+      let sum = 0;
+      for (const point of points) {
+        sum += edgeStrengthAt(point.x, point.y);
+      }
+      return sum / points.length;
+    };
+
+    const refineStrokeToEdges = (rawStroke) => {
+      if (!Array.isArray(rawStroke) || rawStroke.length < 3) {
+        return rawStroke;
+      }
+
+      ensureEdgeMap();
+      if (!state.edgeMap || !state.edgeColorData) {
+        return rawStroke;
+      }
+
+      const sourceStroke = rawStroke.map((point) => ({ x: point.x, y: point.y }));
+      const closed = isStrokeClosed(sourceStroke);
+      const thresholds = buildEdgeSnapThresholds();
+
+      const resampled = resampleStroke(sourceStroke, thresholds.resampleStep);
+      if (resampled.length < 3) {
+        return sourceStroke;
+      }
+
+      const { tangents, normals } = computeTangentsAndNormals(resampled, { closed });
+      const candidateSets = [];
+      for (let i = 0; i < resampled.length; i++) {
+        candidateSets.push(collectCandidatesForPoint({
+          point: resampled[i],
+          anchorPoint: resampled[i],
+          tangent: tangents[i],
+          normal: normals[i],
+          thresholds
+        }));
+      }
+
+      let refined = optimizeCandidatePath(candidateSets, resampled, tangents, normals, thresholds);
+      if (!Array.isArray(refined) || refined.length < 3) {
+        return sourceStroke;
+      }
+
+      refined = smoothPath(refined, thresholds.smoothingPasses, { closed });
+      refined = polishPathToEdges(refined, thresholds, { closed });
+      refined = smoothPath(refined, 1, { closed });
+      refined = simplifyPath(refined, thresholds.minPointDistanceAfterRefine);
+
+      const imageWidth = state.edgeMapWidth;
+      const imageHeight = state.edgeMapHeight;
+      refined = refined
+        .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+        .map((point) => ({
+          x: Math.max(0, Math.min(imageWidth - 1, point.x)),
+          y: Math.max(0, Math.min(imageHeight - 1, point.y))
+        }));
+
+      if (refined.length < 3) {
+        return sourceStroke;
+      }
+
+      let movedPoints = 0;
+      let totalDisplacement = 0;
+      for (let i = 0; i < refined.length; i++) {
+        const sourceIndex = refined.length > 1
+          ? Math.round((i / (refined.length - 1)) * (resampled.length - 1))
+          : 0;
+        const sourcePoint = resampled[sourceIndex] ?? resampled[0];
+        const dx = refined[i].x - sourcePoint.x;
+        const dy = refined[i].y - sourcePoint.y;
+        const displacementSq = (dx * dx) + (dy * dy);
+        if (displacementSq > 0.64) movedPoints += 1;
+        totalDisplacement += Math.sqrt(displacementSq);
+      }
+
+      const movedRatio = movedPoints / Math.max(1, refined.length);
+      const meanDisplacement = totalDisplacement / Math.max(1, refined.length);
+      const rawEdge = averageEdgeStrength(resampled);
+      const refinedEdge = averageEdgeStrength(refined);
+      const edgeGain = rawEdge > 0 ? (refinedEdge / rawEdge) : (refinedEdge > 0 ? 2 : 1);
+
+      if (!Number.isFinite(edgeGain) || (edgeGain < 1.003 && movedRatio < 0.02 && meanDisplacement < 0.35)) {
+        return sourceStroke;
+      }
+
+      return refined;
     };
 
     updateSnapUi();
@@ -1395,7 +2113,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       });
     };
 
-    const MIN_STROKE_POINT_DISTANCE_PX = 2;
+    const MIN_STROKE_POINT_DISTANCE_PX = 1.25;
     const MIN_POLYGON_AREA_PX = 5;
 
     const toSourcePointFromEvent = (event) => {
@@ -1462,6 +2180,22 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       state.alphaAppliedPolygons = [];
       state.alphaMaskVersion = 0;
       state.alphaMaskAppliedVersion = -1;
+      state.edgeSnapEnabled = false;
+      state.edgeSnapLastPoint = null;
+      state.edgeSnapLatched = false;
+      state.edgeMap = null;
+      state.edgeGradX = null;
+      state.edgeGradY = null;
+      state.edgeColorData = null;
+      state.edgeMapWidth = 0;
+      state.edgeMapHeight = 0;
+      state.edgeMapMean = 0;
+      state.edgeMapStd = 0;
+      state.edgeMapMax = 0;
+      state.edgeMapP55 = 0;
+      state.edgeMapP70 = 0;
+      state.edgeMapP82 = 0;
+      state.edgeMapP92 = 0;
     };
 
     const onMouseMove = (event) => {
@@ -1481,7 +2215,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
       if (state.alphaDrawEnabled && state.alphaCurrentStroke) {
         let point = this.#manualCanvasToSourcePoint(state, canvasX, canvasY);
-        point = snapPointToEdge(point);
         if (point) appendStrokePoint(point);
         this.#renderManualTokenStage(state);
         return;
@@ -1529,9 +2262,10 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         if (!point) return;
 
         state.edgeSnapEnabled = !!event.ctrlKey;
+        state.edgeSnapLastPoint = null;
+        state.edgeSnapLatched = false;
         state.alphaCurrentStrokeMode = event.altKey ? "subtract" : "add";
-        const snappedStart = snapPointToEdge(point);
-        state.alphaCurrentStroke = [{ x: snappedStart.x, y: snappedStart.y }];
+        state.alphaCurrentStroke = [{ x: point.x, y: point.y }];
         refreshAlphaControls();
         this.#renderManualTokenStage(state);
         return;
@@ -1552,8 +2286,15 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     const onMouseUp = (event) => {
       if (event.button === 0 && state.alphaCurrentStroke) {
+        if (state.edgeSnapEnabled) {
+          const refined = refineStrokeToEdges(state.alphaCurrentStroke);
+          state.alphaCurrentStroke = Array.isArray(refined) ? refined : state.alphaCurrentStroke;
+        }
+
         finalizeAlphaStroke();
         state.edgeSnapEnabled = false;
+        state.edgeSnapLastPoint = null;
+        state.edgeSnapLatched = false;
         refreshAlphaControls();
         this.#renderManualTokenStage(state);
         return;
@@ -2106,8 +2847,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       const isSubtractStroke = state.alphaCurrentStrokeMode === "subtract";
       ctx.save();
       ctx.lineWidth = 2.4;
-      ctx.strokeStyle = isSubtractStroke ? "#8de8ff" : "#ffd08a";
-      ctx.shadowColor = isSubtractStroke ? "rgba(34, 211, 238, 0.55)" : "rgba(255, 190, 100, 0.55)";
+      ctx.strokeStyle = isSubtractStroke ? "#ff6b6b" : "#ffd08a";
+      ctx.shadowColor = isSubtractStroke ? "rgba(255, 72, 72, 0.62)" : "rgba(255, 190, 100, 0.55)";
       ctx.shadowBlur = 4;
       ctx.setLineDash([8, 6]);
       drawSourcePathStroke(ctx, state.alphaCurrentStroke, drawScale, offsetX, offsetY);
