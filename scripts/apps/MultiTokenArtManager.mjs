@@ -1,6 +1,6 @@
-import { IMAGE_LIMIT, IMAGE_TYPES, MODULE_ID, TOKEN_FLAG_KEYS, DEBUG_VERSION } from "../constants.mjs";
+import { IMAGE_LIMIT, IMAGE_TYPES, MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
 import { getActorModuleData, setActorModuleData } from "../utils/flag-utils.mjs";
-import { uploadFileToActorFolder } from "../utils/file-utils.mjs";
+import { ensureActorDirectory, uploadFileToActorFolder } from "../utils/file-utils.mjs";
 import { pickRandomImage, sortImagesByOrder } from "../logic/RandomMode.mjs";
 import { applyTokenImageById, applyPortraitById, runAutoActivation } from "../logic/AutoActivation.mjs";
 import { applyAutoRotate } from "../logic/AutoRotate.mjs";
@@ -9,6 +9,7 @@ import { AutoTokenService } from "../logic/AutoTokenService.mjs";
 import { SettingsPanel } from "./SettingsPanel.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
+const MANUAL_TOKEN_ZOOM_LIMITS = Object.freeze({ min: 0.1, max: 3 });
 
 export class MultiTokenArtManager extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
@@ -37,6 +38,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     this.actor = actor;
     this.tokenDocument = tokenDocument;
     this.activeSettings = null; // { index, imageType }
+    this._directoryEnsured = false;
+    this._manualTokenDialog = null;
 
     // Clipboard Paste Support
     this._pasteHandler = this.#onPaste.bind(this);
@@ -47,9 +50,14 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     this._internalCardDrag = null;
     this._onRootDragOver = (event) => event.preventDefault();
     this._onRootDrop = (event) => this.#onDrop(event);
+
+    this._moduleVersion = game.modules?.get(MODULE_ID)?.version ?? "0.0.0";
+    this._renderVersion = this.#computeRenderVersion(this._moduleVersion);
   }
 
   async close(options = {}) {
+    this._manualTokenDialog?.close();
+    this._manualTokenDialog = null;
     window.removeEventListener("paste", this._pasteHandler);
     this._pasteListenerAttached = false;
     this._internalCardDrag = null;
@@ -57,6 +65,13 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
   }
 
   async _prepareContext() {
+    this.#refreshVersionSnapshot();
+
+    if (!this._directoryEnsured && this.actor) {
+      await ensureActorDirectory(this.actor);
+      this._directoryEnsured = true;
+    }
+
     const data = getActorModuleData(this.actor);
     let changed = false;
     const activeTokenDocument = this.tokenDocument ?? this.actor?.prototypeToken ?? null;
@@ -185,8 +200,19 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       tokenCards,
       portraitCards,
       activeSettings: activeSettingsData,
-      debugVersion: DEBUG_VERSION
+      debugVersion: this._renderVersion
     };
+  }
+
+  #computeRenderVersion(baseVersion) {
+    const version = String(baseVersion ?? "0.0.0").trim() || "0.0.0";
+    const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 12);
+    return `v${version}.${stamp}`;
+  }
+
+  #refreshVersionSnapshot() {
+    this._moduleVersion = game.modules?.get(MODULE_ID)?.version ?? this._moduleVersion ?? "0.0.0";
+    this._renderVersion = this.#computeRenderVersion(this._moduleVersion);
   }
 
   async _onRender(context, options) {
@@ -208,6 +234,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           else if (action === "save-settings") await this.#onSaveSettings(event);
           else if (action === "browse-file") await this.#onBrowseFile(event);
           else if (action === "create-token") await this.#onCreateToken(event);
+          else if (action === "create-manual-token") await this.#onCreateManualToken(event);
         }
       });
     });
@@ -904,96 +931,29 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     this.render();
   }
 
-  async #onCreateToken(event) {
-    if (!this.activeSettings) return;
+  #resolveActiveImageSource() {
+    if (!this.activeSettings) return null;
 
     const { index, imageType } = this.activeSettings;
-    if (imageType !== IMAGE_TYPES.TOKEN) {
-      ui.notifications.warn("Create Token доступен только для Token-изображений.");
-      return;
-    }
-
     const data = getActorModuleData(this.actor);
-    const list = data.tokenImages;
-    const image = list[index];
-    if (!image) return;
+    const list = imageType === IMAGE_TYPES.TOKEN ? data.tokenImages : data.portraitImages;
+    const image = list?.[index];
+    if (!image) return null;
 
-    // Получаем src из панели (может быть изменён пользователем, но ещё не сохранён)
-    const panel = this.element.querySelector(".mta-settings-panel");
+    // Источник может быть изменён в форме, но ещё не сохранён в flags.
+    const panel = this.element?.querySelector(".mta-settings-panel");
     const srcInput = panel?.querySelector("[name='src']");
-    const src = srcInput?.value || image.src;
+    const src = String(srcInput?.value ?? image.src ?? "").trim();
 
     if (!src || src === "icons/svg/mystery-man.svg") {
-      ui.notifications.warn("Сначала задайте изображение для обработки.");
-      return;
+      ui.notifications.warn(game.i18n.localize("MTA.SourceImageRequired"));
+      return null;
     }
 
-    try {
-      const service = AutoTokenService.instance();
-      const { blob, faceCoordinates } = await service.createTokenBlob(src, 2.5);
-
-      if (!blob) {
-        ui.notifications.error("Не удалось создать токен.");
-        return;
-      }
-
-      // Формируем безопасное имя файла
-      let rawBaseName = src.split("/").pop()?.replace(/\.[^.]+$/, "") || "token";
-      try {
-        rawBaseName = decodeURIComponent(rawBaseName);
-      } catch (e) {
-        // Игнорируем ошибки декодирования
-      }
-
-      // Slugify для безопасности (удаляет спецсимволы, пробелы и т.д.)
-      const baseName = rawBaseName.slugify({ strict: true }) || "token";
-      const fileName = `${baseName}_token.webp`;
-      const file = new File([blob], fileName, { type: "image/webp" });
-
-      // Загружаем в папку актора
-      const uploadedPath = await uploadFileToActorFolder(file, this.actor);
-      if (!uploadedPath) {
-        ui.notifications.error("Ошибка загрузки файла токена.");
-        return;
-      }
-
-      // Обновляем данные изображения
-      image.src = uploadedPath;
-      image.dynamicRing = {
-        enabled: true,
-        scaleCorrection: 1,
-        ringColor: "#ffffff",
-        backgroundColor: "#000000"
-      };
-
-      await setActorModuleData(this.actor, data);
-
-      // Применяем изображение к токену (или к prototype token в actor-only режиме)
-      await applyTokenImageById({ actor: this.actor, tokenDocument: this.tokenDocument, imageId: image.id });
-
-      // Принудительное обновление текстуры на canvas (если нужно)
-      const token = this.tokenDocument?.object;
-      if (token) {
-        token.renderFlags.set({ refreshMesh: true });
-        token.draw();
-      }
-
-      console.log("[MTA AutoToken] Токен создан:", {
-        path: uploadedPath,
-        faceCoordinates,
-        dynamicRing: image.dynamicRing
-      });
-      this.render();
-    } catch (err) {
-      console.error("[MTA AutoToken] Ошибка:", err);
-      ui.notifications.error(`Ошибка создания токена: ${err.message}`);
-    }
+    return { index, imageType, src };
   }
 
-  async #createAutoTokenPathFromSource(src, service) {
-    const { blob } = await service.createTokenBlob(src, 2.5);
-    if (!blob) return null;
-
+  #buildGeneratedTokenFile(blob, src, { generationMode = "auto" } = {}) {
     let rawBaseName = src.split("/").pop()?.replace(/\.[^.]+$/, "") || "token";
     try {
       rawBaseName = decodeURIComponent(rawBaseName);
@@ -1002,8 +962,664 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     }
 
     const baseName = rawBaseName.slugify({ strict: true }) || "token";
-    const fileName = `${baseName}_token.webp`;
-    const file = new File([blob], fileName, { type: "image/webp" });
+    const modeTag = generationMode === "manual" ? "manual" : "auto";
+    const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+    const nonce = (foundry.utils.randomID?.() ?? Math.random().toString(36).slice(2, 10)).slice(0, 8);
+    const fileName = `${baseName}_token_${modeTag}_${stamp}_${nonce}.webp`;
+    return new File([blob], fileName, { type: "image/webp" });
+  }
+
+  async #persistGeneratedTokenBlob({ blob, src, imageType, index, generationMode = "auto" }) {
+    if (!blob) {
+      ui.notifications.error(game.i18n.localize("MTA.TokenCreateFailed"));
+      return null;
+    }
+
+    const file = this.#buildGeneratedTokenFile(blob, src, { generationMode });
+    const uploadedPath = await uploadFileToActorFolder(file, this.actor);
+    if (!uploadedPath) {
+      ui.notifications.error(game.i18n.localize("MTA.TokenUploadFailed"));
+      return null;
+    }
+
+    const data = getActorModuleData(this.actor);
+    let targetTokenImage = null;
+
+    if (imageType === IMAGE_TYPES.PORTRAIT) {
+      const tokenList = sortImagesByOrder(data.tokenImages ?? []);
+      if (tokenList.length >= IMAGE_LIMIT) {
+        ui.notifications.warn(`Limit of ${IMAGE_LIMIT} images reached.`);
+        return null;
+      }
+
+      const insertIndex = Math.min(Math.max(0, index), tokenList.length);
+      const tokenImage = this.#buildGeneratedTokenImage(uploadedPath, insertIndex);
+      tokenList.splice(insertIndex, 0, tokenImage);
+      tokenList.forEach((tokenImageEntry, tokenIndex) => {
+        tokenImageEntry.sort = tokenIndex;
+      });
+
+      if (!tokenList.some((tokenImageEntry) => tokenImageEntry?.isDefault) && tokenList[0]) {
+        tokenList[0].isDefault = true;
+      }
+
+      data.tokenImages = tokenList;
+      targetTokenImage = tokenImage;
+    } else {
+      const tokenList = data.tokenImages ?? [];
+      const tokenImage = tokenList[index];
+      if (!tokenImage) {
+        ui.notifications.warn(game.i18n.localize("MTA.TokenTargetNotFound"));
+        return null;
+      }
+      tokenImage.src = uploadedPath;
+      targetTokenImage = tokenImage;
+    }
+
+    targetTokenImage.dynamicRing = {
+      enabled: true,
+      scaleCorrection: 1,
+      ringColor: "#ffffff",
+      backgroundColor: "#000000"
+    };
+
+    await setActorModuleData(this.actor, data);
+    await applyTokenImageById({ actor: this.actor, tokenDocument: this.tokenDocument, imageId: targetTokenImage.id });
+    this.#forceTokenTextureRefresh();
+
+    return { uploadedPath, targetTokenImage };
+  }
+
+  #forceTokenTextureRefresh() {
+    const token = this.tokenDocument?.object;
+    if (!token) return;
+    token.renderFlags.set({ refreshMesh: true });
+    token.draw();
+  }
+
+  async #onCreateToken(event) {
+    const sourceContext = this.#resolveActiveImageSource();
+    if (!sourceContext) return;
+
+    const { src, imageType, index } = sourceContext;
+
+    try {
+      const service = AutoTokenService.instance();
+      const { blob, faceCoordinates } = await service.createTokenBlob(src, 2.5);
+      const saved = await this.#persistGeneratedTokenBlob({
+        blob,
+        src,
+        imageType,
+        index,
+        generationMode: "auto"
+      });
+      if (!saved) return;
+
+      console.log("[MTA AutoToken] Токен создан:", {
+        path: saved.uploadedPath,
+        faceCoordinates,
+        dynamicRing: saved.targetTokenImage?.dynamicRing
+      });
+      this.render();
+    } catch (err) {
+      console.error("[MTA AutoToken] Ошибка:", err);
+      ui.notifications.error(`${game.i18n.localize("MTA.TokenCreateErrorPrefix")}: ${err.message}`);
+    }
+  }
+
+  async #onCreateManualToken(event) {
+    const sourceContext = this.#resolveActiveImageSource();
+    if (!sourceContext) return;
+
+    const { src, imageType, index } = sourceContext;
+
+    try {
+      const image = await this.#loadImageElement(src);
+      await this.#openManualTokenDialog({ src, imageType, index, image });
+    } catch (err) {
+      console.error("[MTA ManualToken] Ошибка открытия окна:", err);
+      ui.notifications.error(`${game.i18n.localize("MTA.TokenCreateErrorPrefix")}: ${err.message}`);
+    }
+  }
+
+  async #openManualTokenDialog({ src, imageType, index, image }) {
+    this._manualTokenDialog?.close();
+    this._manualTokenDialog = null;
+
+    const viewportWidth = Math.max(480, window.innerWidth || 1280);
+    const viewportHeight = Math.max(360, window.innerHeight || 720);
+
+    const width = Math.max(640, Math.min(1320, viewportWidth - 40));
+    const height = Math.max(420, Math.min(860, viewportHeight - 48));
+    const left = Math.max(8, Math.floor((viewportWidth - width) / 2));
+    const top = Math.max(8, Math.floor((viewportHeight - height) / 2));
+
+    const state = {
+      src,
+      imageType,
+      index,
+      image,
+      zoom: 1,
+      zoomMin: MANUAL_TOKEN_ZOOM_LIMITS.min,
+      zoomMax: MANUAL_TOKEN_ZOOM_LIMITS.max,
+      panX: 0,
+      panY: 0,
+      isPanning: false,
+      panStart: null,
+      hoverSource: {
+        x: (image.naturalWidth || image.width) / 2,
+        y: (image.naturalHeight || image.height) / 2
+      },
+      fixedSource: null,
+      isFixed: false,
+      selection: null,
+      metrics: null,
+      stageCanvas: null,
+      previewCanvas: null,
+      zoomValueEl: null,
+      circleRadiusPx: 0,
+      _stageSizeKey: "",
+      cleanup: null
+    };
+
+    const dialog = new Dialog({
+      title: game.i18n.localize("MTA.ManualTokenDialogTitle"),
+      content: this.#buildManualTokenDialogContent(),
+      buttons: {},
+      render: (html) => {
+        const root = this.#resolveDialogRoot(html, dialog);
+        this.#bindManualTokenDialog(root, dialog, state);
+      },
+      close: () => {
+        if (typeof state.cleanup === "function") state.cleanup();
+        if (this._manualTokenDialog === dialog) this._manualTokenDialog = null;
+      }
+    }, {
+      classes: [MODULE_ID, "mta-manual-token-window"],
+      width,
+      height,
+      top,
+      left,
+      resizable: false
+    });
+
+    this._manualTokenDialog = dialog;
+    dialog.render(true);
+  }
+
+  #resolveDialogRoot(html, dialog) {
+    const direct = html?.[0] ?? html;
+    if (direct?.querySelector) return direct;
+    if (dialog?.element?.querySelector) return dialog.element;
+    return document.querySelector(`.${MODULE_ID}.mta-manual-token-window`) ?? null;
+  }
+
+  #buildManualTokenDialogContent() {
+    const previewTitle = game.i18n.localize("MTA.ManualTokenPreviewTitle");
+    const createLabel = game.i18n.localize("MTA.CreateToken");
+    const cancelLabel = game.i18n.localize("MTA.Cancel");
+    const hint = game.i18n.localize("MTA.ManualTokenHint");
+
+    return `
+      <section class="mta-manual-token-dialog">
+        <div class="mta-manual-token-layout">
+          <div class="mta-manual-token-stage-shell">
+            <canvas class="mta-manual-stage-canvas"></canvas>
+            <div class="mta-manual-zoom-badge"><span data-field="zoom-value">1.00x</span></div>
+          </div>
+
+          <aside class="mta-manual-token-sidebar">
+            <h4>${previewTitle}</h4>
+            <div class="mta-manual-preview-shell">
+              <canvas class="mta-manual-preview-canvas"></canvas>
+            </div>
+
+            <div class="mta-manual-sidebar-actions">
+              <button type="button" class="mta-button-primary" data-action="manual-create-token">${createLabel}</button>
+              <button type="button" data-action="manual-cancel">${cancelLabel}</button>
+            </div>
+          </aside>
+        </div>
+
+        <p class="mta-manual-token-hint">${hint}</p>
+      </section>
+    `;
+  }
+
+  #bindManualTokenDialog(root, dialog, state) {
+    if (!root) return;
+
+    const stageCanvas = root.querySelector(".mta-manual-stage-canvas");
+    const previewCanvas = root.querySelector(".mta-manual-preview-canvas");
+    const zoomValueEl = root.querySelector("[data-field='zoom-value']");
+    const createBtn = root.querySelector("[data-action='manual-create-token']");
+    const cancelBtn = root.querySelector("[data-action='manual-cancel']");
+
+    if (!stageCanvas || !previewCanvas || !createBtn || !cancelBtn) {
+      return;
+    }
+
+    state.stageCanvas = stageCanvas;
+    state.previewCanvas = previewCanvas;
+    state.zoomValueEl = zoomValueEl;
+
+    const onMouseMove = (event) => {
+      if (!state.metrics) return;
+      const rect = stageCanvas.getBoundingClientRect();
+      const canvasX = event.clientX - rect.left;
+      const canvasY = event.clientY - rect.top;
+
+      if (state.isPanning && state.panStart) {
+        const deltaX = event.clientX - state.panStart.clientX;
+        const deltaY = event.clientY - state.panStart.clientY;
+        state.panX = state.panStart.panX + deltaX;
+        state.panY = state.panStart.panY + deltaY;
+        this.#renderManualTokenStage(state);
+        return;
+      }
+
+      const point = this.#manualCanvasToSourcePoint(state, canvasX, canvasY);
+      if (!point) {
+        if (!state.isFixed) state.hoverSource = null;
+        this.#renderManualTokenStage(state);
+        return;
+      }
+
+      if (!state.isFixed) {
+        state.hoverSource = point;
+      }
+
+      this.#renderManualTokenStage(state);
+    };
+
+    const onMouseLeave = () => {
+      if (!state.isFixed && !state.isPanning) {
+        state.hoverSource = null;
+        this.#renderManualTokenStage(state);
+      }
+    };
+
+    const onContextMenu = (event) => {
+      event.preventDefault();
+    };
+
+    const onMouseDown = (event) => {
+      if (event.button !== 2) return;
+      event.preventDefault();
+
+      state.isPanning = true;
+      state.panStart = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        panX: state.panX,
+        panY: state.panY
+      };
+      stageCanvas.classList.add("is-panning");
+    };
+
+    const onMouseUp = (event) => {
+      if (!state.isPanning) return;
+      if (event.button !== 2 && (event.buttons & 2) === 2) return;
+
+      state.isPanning = false;
+      state.panStart = null;
+      stageCanvas.classList.remove("is-panning");
+      this.#renderManualTokenStage(state);
+    };
+
+    const onClick = (event) => {
+      if (event.button !== 0) return;
+      if (state.isPanning) return;
+
+      if (state.isFixed) {
+        state.isFixed = false;
+        state.fixedSource = null;
+        this.#renderManualTokenStage(state);
+        return;
+      }
+
+      const rect = stageCanvas.getBoundingClientRect();
+      const point = this.#manualCanvasToSourcePoint(state, event.clientX - rect.left, event.clientY - rect.top);
+      if (!point) return;
+
+      state.isFixed = true;
+      state.fixedSource = point;
+      state.hoverSource = point;
+      this.#renderManualTokenStage(state);
+    };
+
+    const onWheel = (event) => {
+      event.preventDefault();
+
+      if (!state.metrics) return;
+      const rect = stageCanvas.getBoundingClientRect();
+      const pointerCanvasX = event.clientX - rect.left;
+      const pointerCanvasY = event.clientY - rect.top;
+      const previousMetrics = state.metrics;
+
+      const previousDrawScale = previousMetrics.drawScale;
+      if (!Number.isFinite(previousDrawScale) || previousDrawScale <= 0) return;
+
+      const sourceXBeforeZoom = (pointerCanvasX - previousMetrics.offsetX) / previousDrawScale;
+      const sourceYBeforeZoom = (pointerCanvasY - previousMetrics.offsetY) / previousDrawScale;
+
+      const zoomStep = event.deltaY < 0 ? 1.1 : (1 / 1.1);
+      const nextZoom = Math.min(state.zoomMax, Math.max(state.zoomMin, state.zoom * zoomStep));
+      if (Math.abs(nextZoom - state.zoom) < 0.0001) return;
+
+      state.zoom = nextZoom;
+
+      const imageWidth = state.image.naturalWidth || state.image.width;
+      const imageHeight = state.image.naturalHeight || state.image.height;
+      const fitScale = Math.min(previousMetrics.width / imageWidth, previousMetrics.height / imageHeight);
+      const nextDrawScale = Math.max(0.0001, fitScale * state.zoom);
+      const nextDrawWidth = imageWidth * nextDrawScale;
+      const nextDrawHeight = imageHeight * nextDrawScale;
+
+      const baseOffsetX = (previousMetrics.width - nextDrawWidth) / 2;
+      const baseOffsetY = (previousMetrics.height - nextDrawHeight) / 2;
+
+      const safeSourceX = Number.isFinite(sourceXBeforeZoom) ? sourceXBeforeZoom : (imageWidth / 2);
+      const safeSourceY = Number.isFinite(sourceYBeforeZoom) ? sourceYBeforeZoom : (imageHeight / 2);
+
+      const targetOffsetX = pointerCanvasX - (safeSourceX * nextDrawScale);
+      const targetOffsetY = pointerCanvasY - (safeSourceY * nextDrawScale);
+
+      state.panX = targetOffsetX - baseOffsetX;
+      state.panY = targetOffsetY - baseOffsetY;
+      this.#renderManualTokenStage(state);
+    };
+
+    const onCreate = async () => {
+      if (!state.selection) {
+        ui.notifications.warn(game.i18n.localize("MTA.ManualTokenSelectArea"));
+        return;
+      }
+
+      createBtn.disabled = true;
+      cancelBtn.disabled = true;
+      try {
+        const service = AutoTokenService.instance();
+        const { blob } = await service.createTokenBlobFromSelection({
+          imageSource: state.image,
+          centerX: state.selection.centerX,
+          centerY: state.selection.centerY,
+          cropSize: state.selection.cropSize
+        });
+
+        const saved = await this.#persistGeneratedTokenBlob({
+          blob,
+          src: state.src,
+          imageType: state.imageType,
+          index: state.index,
+          generationMode: "manual"
+        });
+
+        if (!saved) return;
+        ui.notifications.info(game.i18n.localize("MTA.ManualTokenCreated"));
+        dialog.close();
+        this.render();
+      } catch (err) {
+        console.error("[MTA ManualToken] Ошибка создания:", err);
+        ui.notifications.error(`${game.i18n.localize("MTA.TokenCreateErrorPrefix")}: ${err.message}`);
+      } finally {
+        if (this._manualTokenDialog === dialog) {
+          createBtn.disabled = false;
+          cancelBtn.disabled = false;
+        }
+      }
+    };
+
+    const onCancel = () => dialog.close();
+    const onWindowResize = () => this.#renderManualTokenStage(state);
+
+    stageCanvas.addEventListener("mousemove", onMouseMove);
+    stageCanvas.addEventListener("mouseleave", onMouseLeave);
+    stageCanvas.addEventListener("contextmenu", onContextMenu);
+    stageCanvas.addEventListener("mousedown", onMouseDown);
+    stageCanvas.addEventListener("click", onClick);
+    stageCanvas.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("mouseup", onMouseUp);
+    createBtn.addEventListener("click", onCreate);
+    cancelBtn.addEventListener("click", onCancel);
+    window.addEventListener("resize", onWindowResize);
+
+    state.cleanup = () => {
+      stageCanvas.removeEventListener("mousemove", onMouseMove);
+      stageCanvas.removeEventListener("mouseleave", onMouseLeave);
+      stageCanvas.removeEventListener("contextmenu", onContextMenu);
+      stageCanvas.removeEventListener("mousedown", onMouseDown);
+      stageCanvas.removeEventListener("click", onClick);
+      stageCanvas.removeEventListener("wheel", onWheel);
+      window.removeEventListener("mouseup", onMouseUp);
+      stageCanvas.classList.remove("is-panning");
+      createBtn.removeEventListener("click", onCreate);
+      cancelBtn.removeEventListener("click", onCancel);
+      window.removeEventListener("resize", onWindowResize);
+    };
+
+    this.#renderManualTokenStage(state);
+  }
+
+  #syncCanvasResolution(canvas) {
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.floor(canvas.clientWidth || 1));
+    const height = Math.max(1, Math.floor(canvas.clientHeight || 1));
+    const pixelWidth = Math.max(1, Math.floor(width * dpr));
+    const pixelHeight = Math.max(1, Math.floor(height * dpr));
+
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+
+    return { width, height, dpr };
+  }
+
+  #clampNumber(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  #clampManualOffsets({ width, height, drawWidth, drawHeight, offsetX, offsetY }) {
+    const xRange = drawWidth >= width
+      ? { min: width - drawWidth, max: 0 }
+      : { min: 0, max: width - drawWidth };
+
+    const yRange = drawHeight >= height
+      ? { min: height - drawHeight, max: 0 }
+      : { min: 0, max: height - drawHeight };
+
+    return {
+      offsetX: this.#clampNumber(offsetX, xRange.min, xRange.max),
+      offsetY: this.#clampNumber(offsetY, yRange.min, yRange.max)
+    };
+  }
+
+  #manualCanvasToSourcePoint(state, canvasX, canvasY) {
+    const metrics = state.metrics;
+    if (!metrics) return null;
+
+    const imageWidth = state.image.naturalWidth || state.image.width;
+    const imageHeight = state.image.naturalHeight || state.image.height;
+
+    const inX = canvasX >= metrics.offsetX && canvasX <= (metrics.offsetX + metrics.drawWidth);
+    const inY = canvasY >= metrics.offsetY && canvasY <= (metrics.offsetY + metrics.drawHeight);
+    if (!inX || !inY) return null;
+
+    const sourceX = (canvasX - metrics.offsetX) / metrics.drawScale;
+    const sourceY = (canvasY - metrics.offsetY) / metrics.drawScale;
+    if (!Number.isFinite(sourceX) || !Number.isFinite(sourceY)) return null;
+
+    return {
+      x: Math.max(0, Math.min(imageWidth, sourceX)),
+      y: Math.max(0, Math.min(imageHeight, sourceY))
+    };
+  }
+
+  #renderManualTokenStage(state) {
+    const stageCanvas = state.stageCanvas;
+    const previewCanvas = state.previewCanvas;
+    if (!stageCanvas || !previewCanvas) return;
+
+    const { width, height, dpr } = this.#syncCanvasResolution(stageCanvas);
+    const ctx = stageCanvas.getContext("2d");
+    if (!ctx) return;
+
+    const imageWidth = state.image.naturalWidth || state.image.width;
+    const imageHeight = state.image.naturalHeight || state.image.height;
+    const fitScale = Math.min(width / imageWidth, height / imageHeight);
+    const drawScale = Math.max(0.0001, fitScale * state.zoom);
+    const drawWidth = imageWidth * drawScale;
+    const drawHeight = imageHeight * drawScale;
+    const baseOffsetX = (width - drawWidth) / 2;
+    const baseOffsetY = (height - drawHeight) / 2;
+
+    const unclampedOffsetX = baseOffsetX + (state.panX ?? 0);
+    const unclampedOffsetY = baseOffsetY + (state.panY ?? 0);
+    const clampedOffsets = this.#clampManualOffsets({
+      width,
+      height,
+      drawWidth,
+      drawHeight,
+      offsetX: unclampedOffsetX,
+      offsetY: unclampedOffsetY
+    });
+
+    const offsetX = clampedOffsets.offsetX;
+    const offsetY = clampedOffsets.offsetY;
+    state.panX = offsetX - baseOffsetX;
+    state.panY = offsetY - baseOffsetY;
+
+    state.metrics = {
+      width,
+      height,
+      drawScale,
+      drawWidth,
+      drawHeight,
+      baseOffsetX,
+      baseOffsetY,
+      offsetX,
+      offsetY
+    };
+
+    const stageSizeKey = `${width}x${height}`;
+    if (state._stageSizeKey !== stageSizeKey || state.circleRadiusPx <= 0) {
+      state.circleRadiusPx = Math.max(42, Math.min(width, height) * 0.22);
+      state._stageSizeKey = stageSizeKey;
+    }
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(state.image, offsetX, offsetY, drawWidth, drawHeight);
+
+    const activeSource = state.isFixed ? state.fixedSource : state.hoverSource;
+    if (!activeSource) {
+      this.#clearManualTokenPreview(state);
+      state.selection = null;
+      if (state.zoomValueEl) state.zoomValueEl.textContent = `${state.zoom.toFixed(2)}x`;
+      return;
+    }
+
+    const circleX = offsetX + (activeSource.x * drawScale);
+    const circleY = offsetY + (activeSource.y * drawScale);
+
+    ctx.save();
+    ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+    ctx.beginPath();
+    ctx.rect(0, 0, width, height);
+    ctx.moveTo(circleX + state.circleRadiusPx, circleY);
+    ctx.arc(circleX, circleY, state.circleRadiusPx, 0, Math.PI * 2, true);
+    ctx.fill("evenodd");
+    ctx.restore();
+
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = state.isFixed ? "#22d3ee" : "#ff6400";
+    ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(circleX, circleY, state.circleRadiusPx, 0, Math.PI * 2);
+    ctx.stroke();
+    if (state.isFixed) {
+      ctx.fillStyle = "#22d3ee";
+      ctx.beginPath();
+      ctx.arc(circleX, circleY, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    const cropSize = (state.circleRadiusPx * 2) / drawScale;
+    state.selection = {
+      centerX: activeSource.x,
+      centerY: activeSource.y,
+      cropSize
+    };
+
+    this.#renderManualTokenPreview(state);
+    if (state.zoomValueEl) state.zoomValueEl.textContent = `${state.zoom.toFixed(2)}x`;
+  }
+
+  #clearManualTokenPreview(state) {
+    const previewCanvas = state.previewCanvas;
+    if (!previewCanvas) return;
+
+    const { width, height, dpr } = this.#syncCanvasResolution(previewCanvas);
+    const ctx = previewCanvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+  }
+
+  #renderManualTokenPreview(state) {
+    const previewCanvas = state.previewCanvas;
+    if (!previewCanvas || !state.selection) return;
+
+    const { width, height, dpr } = this.#syncCanvasResolution(previewCanvas);
+    const ctx = previewCanvas.getContext("2d");
+    if (!ctx) return;
+
+    const service = AutoTokenService.instance();
+    const tokenCanvas = service.createTokenCanvasFromSelection({
+      image: state.image,
+      centerX: state.selection.centerX,
+      centerY: state.selection.centerY,
+      cropSize: state.selection.cropSize
+    });
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(tokenCanvas, 0, 0, width, height);
+  }
+
+  #loadImageElement(source) {
+    if (source instanceof HTMLImageElement && source.complete && source.naturalWidth > 0) {
+      return Promise.resolve(source);
+    }
+
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = async () => {
+        try {
+          await img.decode();
+        } catch (_e) {
+          // ignore decode errors, use onload fallback
+        }
+        resolve(img);
+      };
+      img.onerror = () => reject(new Error(`[MTA] Image load failed: ${source}`));
+      img.src = typeof source === "string" ? source : source.src;
+    });
+  }
+
+  async #createAutoTokenPathFromSource(src, service) {
+    const { blob } = await service.createTokenBlob(src, 2.5);
+    if (!blob) return null;
+
+    const file = this.#buildGeneratedTokenFile(blob, src, { generationMode: "auto" });
     return uploadFileToActorFolder(file, this.actor);
   }
 

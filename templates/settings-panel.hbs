@@ -73,11 +73,15 @@
       <input type="color" name="dynamicRing.backgroundColor" value="{{image.dynamicRing.backgroundColor}}" />
     </label>
     <hr class="mta-dashed-separator">
+    {{/if}}
 
     <button type="button" class="mta-create-token-btn" data-action="create-token">
       <i class="fas fa-magic"></i> {{localize "MTA.CreateAutoToken"}}
     </button>
-    {{/if}}
+
+    <button type="button" class="mta-create-token-btn mta-create-manual-token-btn" data-action="create-manual-token">
+      <i class="fas fa-crosshairs"></i> {{localize "MTA.CreateManualToken"}}
+    </button>
 
     <label class="label-file">
       <span class="label-text">{{localize "MTA.ImageFile"}}</span>

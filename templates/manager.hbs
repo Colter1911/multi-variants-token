@@ -15,15 +15,13 @@
                   {{checked global.tokenRandom}} />{{localize "MTA.Random"}}</label>
               <label class="mta-token-link"><input type="checkbox" name="linkTokenPortrait" data-action="toggle-global"
                   {{checked global.linkTokenPortrait}} />{{localize "MTA.LinkTokenPortrait"}}</label>
-              <label class="mta-autorotate mta-token-autorotate"><input type="checkbox" name="autoRotate"
-                  data-action="toggle-global" {{checked global.autoRotate}} />{{localize "MTA.AutoRotate"}}</label>
             </div>
           </div>
           <div class="mta-control-group mta-token-header-actions">
             <button type="button" data-action="refresh-random" data-image-type="token">{{localize
               "MTA.PickRandom"}}</button>
-            <button type="button" data-action="create-token-for-all" data-image-type="token">{{localize
-              "MTA.CreateAutoTokenForAll"}}</button>
+            <label class="mta-autorotate mta-token-autorotate"><input type="checkbox" name="autoRotate"
+                data-action="toggle-global" {{checked global.autoRotate}} />{{localize "MTA.AutoRotate"}}</label>
           </div>
         </div>
         <div class="mta-grid">

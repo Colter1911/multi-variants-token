@@ -1,6 +1,7 @@
 import { MODULE_ID, TOKEN_FLAG_KEYS } from "./constants.mjs";
 import { registerSettings, applySystemPresetIfNeeded } from "./settings.mjs";
 import { registerTokenHudButton, openManagerForTokenDocument, openManagerForActor } from "./ui/TokenHUD.mjs";
+import { registerFileSocketHandlers } from "./utils/file-utils.mjs";
 import { runAutoActivation, applyTokenImageById, applyPortraitById } from "./logic/AutoActivation.mjs";
 import { pickRandomImage } from "./logic/RandomMode.mjs";
 import { getActorModuleData } from "./utils/flag-utils.mjs";
@@ -111,6 +112,7 @@ Hooks.once("init", async () => {
 
 Hooks.once("ready", () => {
   applySystemPresetIfNeeded();
+  registerFileSocketHandlers();
   // Re-apply API in case another package overwrote it after init.
   setModuleApi();
 

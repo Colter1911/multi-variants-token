@@ -12,6 +12,7 @@ import { MODULE_ID } from "../constants.mjs";
 
 const MODEL_PATH = `modules/${MODULE_ID}/models`;
 const TOKEN_SIZE = 512;
+const INNER_SCALE = 0.85;
 
 let _instance = null;
 let _modelsLoaded = false;
@@ -133,105 +134,27 @@ export class AutoTokenService {
         }
 
         // --- Шаг В: Вычисление геометрии (Safe Crop with Shift) ---
-        let cropSize = faceHeight * scaleFactor;
+        const cropRect = this._createSafeCropRect({
+            centerX: faceCenterX,
+            centerY: faceCenterY,
+            cropSize: faceHeight * scaleFactor,
+            imgWidth,
+            imgHeight
+        });
 
-        // 1. Cap crop size to the smallest dimension of the image
-        const maxPossibleSize = Math.min(imgWidth, imgHeight);
-        if (cropSize > maxPossibleSize) {
-            console.warn(`[MTA AutoToken] Requested crop size ${cropSize} exceeds image bounds. Clamped to ${maxPossibleSize}.`);
-            cropSize = maxPossibleSize;
-        }
+        console.log(`[MTA AutoToken] Final Draw Coords: sx=${cropRect.sx}, sy=${cropRect.sy}, size=${cropRect.sw}x${cropRect.sh} from ${imgWidth}x${imgHeight}`);
 
-        const halfCrop = cropSize / 2;
-
-        // 2. Calculate initial top-left corner
-        let sx = faceCenterX - halfCrop;
-        let sy = faceCenterY - halfCrop;
-
-        // 3. Shift/Clamp to keep within image boundaries
-        // Only shift origin, do NOT resize crop (preserves Aspect Ratio)
-        if (sx < 0) sx = 0;
-        if (sx + cropSize > imgWidth) sx = imgWidth - cropSize;
-
-        if (sy < 0) sy = 0;
-        if (sy + cropSize > imgHeight) sy = imgHeight - cropSize;
-
-        // Final Integer Rounding
-        // Use floor for origin, ceil for size? No, keep it simple.
-        let sw = Math.floor(cropSize);
-        let sh = Math.floor(cropSize);
-        sx = Math.floor(sx);
-        sy = Math.floor(sy);
-
-        console.log(`[MTA AutoToken] Final Draw Coords: sx=${sx}, sy=${sy}, size=${sw}x${sh} from ${imgWidth}x${imgHeight}`);
-
-        // Aspect Ratio Safe Clamp
-        // If despite all logic, we are still 1px out (rounding),
-        // we must shrink BOTH width and height to keep square.
-        if (sx + sw > imgWidth) {
-            const diff = (sx + sw) - imgWidth;
-            sw -= diff;
-            sh -= diff; // Keep square!
-        }
-        if (sy + sh > imgHeight) {
-            const diff = (sy + sh) - imgHeight;
-            sw -= diff;
-            sh -= diff; // Keep square!
-        }
-
-        // Double check < 0
-        if (sw < 1) sw = 1;
-        if (sh < 1) sh = 1;
-
-        console.log(`[MTA AutoToken] Final Draw Coords: sx=${sx}, sy=${sy}, size=${sw}x${sh} from ${imgWidth}x${imgHeight}`);
         try {
-            // --- Шаг Г: Композитинг (Intermediate Canvas Method) ---
-            // Create a canvas exactly the size of the crop
-            const cropCanvas = document.createElement("canvas");
-            cropCanvas.width = sw;
-            cropCanvas.height = sh;
-            const cropCtx = cropCanvas.getContext("2d");
-
-            // Draw the image shifted by -sx, -sy.
-            // Any pixels outside [0, 0, imgWidth, imgHeight] are essentially "transparent void" in the source,
-            // so drawing them results in transparency on the cropCanvas.
-            cropCtx.drawImage(img, -sx, -sy);
-
-
-            // --- Final Token Canvas ---
-            const canvas = document.createElement("canvas");
-            canvas.width = TOKEN_SIZE;
-            canvas.height = TOKEN_SIZE;
-            const ctx = canvas.getContext("2d");
-
-            // Очистка (по умолчанию прозрачный)
-            ctx.clearRect(0, 0, TOKEN_SIZE, TOKEN_SIZE);
-
-            // Масштаб 0.85 — чтобы круг вписывался внутрь Dynamic Ring
-            const INNER_SCALE = 0.85;
-            const innerSize = TOKEN_SIZE * INNER_SCALE;
-            const innerRadius = innerSize / 2;
-            const offset = (TOKEN_SIZE - innerSize) / 2;
-
-            // Создание круглого клиппинга для токена
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(TOKEN_SIZE / 2, TOKEN_SIZE / 2, innerRadius, 0, Math.PI * 2);
-            ctx.closePath();
-            ctx.clip();
-
-            // Рисуем подготовленный cropCanvas, растягивая его на innerSize
-            ctx.drawImage(cropCanvas, 0, 0, sw, sh, offset, offset, innerSize, innerSize);
-            ctx.restore();
-
-            // --- Шаг Д: Вывод ---
-            const blob = await new Promise((resolve) => {
-                canvas.toBlob((b) => resolve(b), "image/webp", 0.85);
+            const canvas = this._renderTokenCanvasFromCrop({
+                img,
+                sx: cropRect.sx,
+                sy: cropRect.sy,
+                sw: cropRect.sw,
+                sh: cropRect.sh
             });
 
-            if (!blob) {
-                throw new Error("Canvas toBlob failed (empty or corrupt image data).");
-            }
+            // --- Шаг Д: Вывод ---
+            const blob = await this._canvasToWebpBlob(canvas);
 
             return { blob, faceCoordinates };
         } catch (err) {
@@ -239,6 +162,187 @@ export class AutoTokenService {
             throw err;
         }
 
+    }
+
+    /**
+     * Создаёт круглый токен из ручной области (центр + размер квадрата в px исходника).
+     * Не требует face detection.
+     *
+     * @param {object} params
+     * @param {string|HTMLImageElement} params.imageSource
+     * @param {number} params.centerX
+     * @param {number} params.centerY
+     * @param {number} params.cropSize
+     * @returns {Promise<{blob: Blob, cropRect: {sx:number, sy:number, sw:number, sh:number}}>} 
+     */
+    async createTokenBlobFromSelection({ imageSource, centerX, centerY, cropSize }) {
+        const img = await this._loadImage(imageSource);
+        const imgWidth = img.naturalWidth || img.width;
+        const imgHeight = img.naturalHeight || img.height;
+
+        const cropRect = this._createSafeCropRect({
+            centerX,
+            centerY,
+            cropSize,
+            imgWidth,
+            imgHeight
+        });
+
+        const canvas = this._renderTokenCanvasFromCrop({
+            img,
+            sx: cropRect.sx,
+            sy: cropRect.sy,
+            sw: cropRect.sw,
+            sh: cropRect.sh
+        });
+
+        const blob = await this._canvasToWebpBlob(canvas);
+        return { blob, cropRect };
+    }
+
+    /**
+     * Быстрый рендер превью токена из ручной области. Возвращает canvas TOKEN_SIZE.
+     *
+     * @param {object} params
+     * @param {HTMLImageElement} params.image
+     * @param {number} params.centerX
+     * @param {number} params.centerY
+     * @param {number} params.cropSize
+     * @returns {HTMLCanvasElement}
+     */
+    createTokenCanvasFromSelection({ image, centerX, centerY, cropSize }) {
+        const img = image;
+        if (!(img instanceof HTMLImageElement)) {
+            throw new Error("[MTA AutoToken] createTokenCanvasFromSelection: image must be HTMLImageElement.");
+        }
+
+        const imgWidth = img.naturalWidth || img.width;
+        const imgHeight = img.naturalHeight || img.height;
+
+        const cropRect = this._createSafeCropRect({
+            centerX,
+            centerY,
+            cropSize,
+            imgWidth,
+            imgHeight
+        });
+
+        return this._renderTokenCanvasFromCrop({
+            img,
+            sx: cropRect.sx,
+            sy: cropRect.sy,
+            sw: cropRect.sw,
+            sh: cropRect.sh
+        });
+    }
+
+    /**
+     * Вычисляет безопасный квадратный crop: центр + размер -> sx/sy/sw/sh в пределах изображения.
+     * @private
+     */
+    _createSafeCropRect({ centerX, centerY, cropSize, imgWidth, imgHeight }) {
+        const safeCenterX = Number.isFinite(centerX) ? centerX : imgWidth / 2;
+        const safeCenterY = Number.isFinite(centerY) ? centerY : imgHeight / 2;
+
+        let safeCropSize = Number.isFinite(cropSize) ? cropSize : Math.min(imgWidth, imgHeight);
+        if (safeCropSize <= 0) safeCropSize = Math.min(imgWidth, imgHeight);
+
+        // 1. Cap crop size to the smallest dimension of the image
+        const maxPossibleSize = Math.min(imgWidth, imgHeight);
+        if (safeCropSize > maxPossibleSize) {
+            safeCropSize = maxPossibleSize;
+        }
+
+        const halfCrop = safeCropSize / 2;
+
+        // 2. Calculate initial top-left corner
+        let sx = safeCenterX - halfCrop;
+        let sy = safeCenterY - halfCrop;
+
+        // 3. Shift/Clamp to keep within image boundaries
+        if (sx < 0) sx = 0;
+        if (sx + safeCropSize > imgWidth) sx = imgWidth - safeCropSize;
+
+        if (sy < 0) sy = 0;
+        if (sy + safeCropSize > imgHeight) sy = imgHeight - safeCropSize;
+
+        // Final Integer Rounding
+        let sw = Math.floor(safeCropSize);
+        let sh = Math.floor(safeCropSize);
+        sx = Math.floor(sx);
+        sy = Math.floor(sy);
+
+        // Aspect Ratio Safe Clamp
+        if (sx + sw > imgWidth) {
+            const diff = (sx + sw) - imgWidth;
+            sw -= diff;
+            sh -= diff;
+        }
+        if (sy + sh > imgHeight) {
+            const diff = (sy + sh) - imgHeight;
+            sw -= diff;
+            sh -= diff;
+        }
+
+        if (sw < 1) sw = 1;
+        if (sh < 1) sh = 1;
+
+        return { sx, sy, sw, sh };
+    }
+
+    /**
+     * Рендерит TOKEN_SIZE canvas из квадратного crop исходного изображения.
+     * @private
+     */
+    _renderTokenCanvasFromCrop({ img, sx, sy, sw, sh }) {
+        // --- Шаг Г: Композитинг (Intermediate Canvas Method) ---
+        const cropCanvas = document.createElement("canvas");
+        cropCanvas.width = sw;
+        cropCanvas.height = sh;
+        const cropCtx = cropCanvas.getContext("2d");
+        cropCtx.drawImage(img, -sx, -sy);
+
+        // --- Final Token Canvas ---
+        const canvas = document.createElement("canvas");
+        canvas.width = TOKEN_SIZE;
+        canvas.height = TOKEN_SIZE;
+        const ctx = canvas.getContext("2d");
+
+        // Очистка (по умолчанию прозрачный)
+        ctx.clearRect(0, 0, TOKEN_SIZE, TOKEN_SIZE);
+
+        // Масштаб 0.85 — чтобы круг вписывался внутрь Dynamic Ring
+        const innerSize = TOKEN_SIZE * INNER_SCALE;
+        const innerRadius = innerSize / 2;
+        const offset = (TOKEN_SIZE - innerSize) / 2;
+
+        // Создание круглого клиппинга для токена
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(TOKEN_SIZE / 2, TOKEN_SIZE / 2, innerRadius, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+
+        // Рисуем подготовленный cropCanvas, растягивая его на innerSize
+        ctx.drawImage(cropCanvas, 0, 0, sw, sh, offset, offset, innerSize, innerSize);
+        ctx.restore();
+
+        return canvas;
+    }
+
+    /**
+     * @private
+     */
+    async _canvasToWebpBlob(canvas, quality = 0.85) {
+        const blob = await new Promise((resolve) => {
+            canvas.toBlob((b) => resolve(b), "image/webp", quality);
+        });
+
+        if (!blob) {
+            throw new Error("Canvas toBlob failed (empty or corrupt image data).");
+        }
+
+        return blob;
     }
 
     /**
