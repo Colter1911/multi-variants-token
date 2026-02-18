@@ -2,7 +2,7 @@
   "id": "multi-tokenart",
   "title": "Multi Token Art",
   "description": "Manage multiple token and portrait images with auto-activation, random mode, and Dynamic Ring integration.",
-  "version": "0.4.54",
+  "version": "0.4.56",
   "compatibility": {
     "minimum": "13",
     "verified": "13"

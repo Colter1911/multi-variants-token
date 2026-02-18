@@ -1089,8 +1089,45 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const viewportWidth = Math.max(480, window.innerWidth || 1280);
     const viewportHeight = Math.max(360, window.innerHeight || 720);
 
-    const width = Math.max(640, Math.min(1320, viewportWidth - 40));
-    const height = Math.max(420, Math.min(860, viewportHeight - 48));
+    const imageWidth = image.naturalWidth || image.width || 1;
+    const imageHeight = image.naturalHeight || image.height || 1;
+    const imageRatio = Math.max(0.2, Math.min(5, imageWidth / imageHeight));
+
+    const rightPanelWidth = 280;
+    const layoutGap = 8;
+
+    // CSS paddings for .mta-manual-token-dialog: 8px left/right, 8px top, 6px bottom.
+    const contentPaddingX = 16;
+    const contentPaddingY = 14;
+    const hintLineHeight = 14;
+    const hintGap = 4;
+    const windowChrome = 38; // title bar + borders
+
+    const maxDialogWidth = Math.max(640, viewportWidth - 20);
+    const maxDialogHeight = Math.max(430, viewportHeight - 20);
+
+    const maxInnerWidth = Math.max(620, maxDialogWidth - contentPaddingX);
+    const maxLayoutHeight = Math.max(300, maxDialogHeight - windowChrome - contentPaddingY - hintLineHeight - hintGap);
+    const maxStageWidth = Math.max(320, maxInnerWidth - rightPanelWidth - layoutGap);
+
+    let stageWidth = Math.min(maxStageWidth, Math.round(maxLayoutHeight * imageRatio));
+    if (!Number.isFinite(stageWidth) || stageWidth <= 0) stageWidth = maxStageWidth;
+
+    const minStageWidth = 320;
+    stageWidth = Math.max(minStageWidth, stageWidth);
+
+    let layoutWidth = stageWidth + rightPanelWidth + layoutGap;
+    if (layoutWidth > maxInnerWidth) {
+      layoutWidth = maxInnerWidth;
+      stageWidth = Math.max(minStageWidth, layoutWidth - rightPanelWidth - layoutGap);
+    }
+
+    const stageHeight = Math.max(260, Math.round(stageWidth / imageRatio));
+    const layoutHeight = Math.min(maxLayoutHeight, stageHeight);
+
+    const width = Math.max(640, Math.min(maxDialogWidth, Math.round(layoutWidth + contentPaddingX)));
+    const height = Math.max(430, Math.min(maxDialogHeight, Math.round(layoutHeight + contentPaddingY + hintLineHeight + hintGap + windowChrome)));
+
     const left = Math.max(8, Math.floor((viewportWidth - width) / 2));
     const top = Math.max(8, Math.floor((viewportHeight - height) / 2));
 
@@ -1119,7 +1156,10 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       zoomValueEl: null,
       circleRadiusPx: 0,
       _stageSizeKey: "",
-      cleanup: null
+      cleanup: null,
+      renderRafId: null,
+      resizeObserver: null,
+      initialRenderTimeout: null
     };
 
     const dialog = new Dialog({
@@ -1189,6 +1229,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
   #bindManualTokenDialog(root, dialog, state) {
     if (!root) return;
 
+    const stageShell = root.querySelector(".mta-manual-token-stage-shell");
     const stageCanvas = root.querySelector(".mta-manual-stage-canvas");
     const previewCanvas = root.querySelector(".mta-manual-preview-canvas");
     const zoomValueEl = root.querySelector("[data-field='zoom-value']");
@@ -1202,6 +1243,17 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     state.stageCanvas = stageCanvas;
     state.previewCanvas = previewCanvas;
     state.zoomValueEl = zoomValueEl;
+
+    const scheduleStageRender = () => {
+      if (state.renderRafId) {
+        cancelAnimationFrame(state.renderRafId);
+      }
+
+      state.renderRafId = requestAnimationFrame(() => {
+        state.renderRafId = null;
+        this.#renderManualTokenStage(state);
+      });
+    };
 
     const onMouseMove = (event) => {
       if (!state.metrics) return;
@@ -1384,6 +1436,14 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     cancelBtn.addEventListener("click", onCancel);
     window.addEventListener("resize", onWindowResize);
 
+    if (typeof ResizeObserver !== "undefined" && stageShell) {
+      const observer = new ResizeObserver(() => {
+        scheduleStageRender();
+      });
+      observer.observe(stageShell);
+      state.resizeObserver = observer;
+    }
+
     state.cleanup = () => {
       stageCanvas.removeEventListener("mousemove", onMouseMove);
       stageCanvas.removeEventListener("mouseleave", onMouseLeave);
@@ -1393,12 +1453,30 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       stageCanvas.removeEventListener("wheel", onWheel);
       window.removeEventListener("mouseup", onMouseUp);
       stageCanvas.classList.remove("is-panning");
+      if (state.resizeObserver) {
+        state.resizeObserver.disconnect();
+        state.resizeObserver = null;
+      }
+      if (state.renderRafId) {
+        cancelAnimationFrame(state.renderRafId);
+        state.renderRafId = null;
+      }
+      if (state.initialRenderTimeout) {
+        clearTimeout(state.initialRenderTimeout);
+        state.initialRenderTimeout = null;
+      }
       createBtn.removeEventListener("click", onCreate);
       cancelBtn.removeEventListener("click", onCancel);
       window.removeEventListener("resize", onWindowResize);
     };
 
-    this.#renderManualTokenStage(state);
+    // Двойной стартовый рендер нужен, чтобы избежать визуального сжатия до
+    // окончательной раскладки окна (наблюдалось до первого движения мыши).
+    scheduleStageRender();
+    state.initialRenderTimeout = setTimeout(() => {
+      state.initialRenderTimeout = null;
+      scheduleStageRender();
+    }, 40);
   }
 
   #syncCanvasResolution(canvas) {
