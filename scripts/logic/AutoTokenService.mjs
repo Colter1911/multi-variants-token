@@ -173,9 +173,10 @@ export class AutoTokenService {
      * @param {number} params.centerX
      * @param {number} params.centerY
      * @param {number} params.cropSize
+     * @param {Array<Array<{x:number, y:number}>>} [params.alphaPolygons] — полигоны в координатах исходника
      * @returns {Promise<{blob: Blob, cropRect: {sx:number, sy:number, sw:number, sh:number}}>} 
      */
-    async createTokenBlobFromSelection({ imageSource, centerX, centerY, cropSize }) {
+    async createTokenBlobFromSelection({ imageSource, centerX, centerY, cropSize, alphaPolygons = null }) {
         const img = await this._loadImage(imageSource);
         const imgWidth = img.naturalWidth || img.width;
         const imgHeight = img.naturalHeight || img.height;
@@ -193,7 +194,8 @@ export class AutoTokenService {
             sx: cropRect.sx,
             sy: cropRect.sy,
             sw: cropRect.sw,
-            sh: cropRect.sh
+            sh: cropRect.sh,
+            alphaPolygons
         });
 
         const blob = await this._canvasToWebpBlob(canvas);
@@ -208,9 +210,10 @@ export class AutoTokenService {
      * @param {number} params.centerX
      * @param {number} params.centerY
      * @param {number} params.cropSize
+     * @param {Array<Array<{x:number, y:number}>>} [params.alphaPolygons] — полигоны в координатах исходника
      * @returns {HTMLCanvasElement}
      */
-    createTokenCanvasFromSelection({ image, centerX, centerY, cropSize }) {
+    createTokenCanvasFromSelection({ image, centerX, centerY, cropSize, alphaPolygons = null }) {
         const img = image;
         if (!(img instanceof HTMLImageElement)) {
             throw new Error("[MTA AutoToken] createTokenCanvasFromSelection: image must be HTMLImageElement.");
@@ -232,7 +235,8 @@ export class AutoTokenService {
             sx: cropRect.sx,
             sy: cropRect.sy,
             sw: cropRect.sw,
-            sh: cropRect.sh
+            sh: cropRect.sh,
+            alphaPolygons
         });
     }
 
@@ -294,14 +298,7 @@ export class AutoTokenService {
      * Рендерит TOKEN_SIZE canvas из квадратного crop исходного изображения.
      * @private
      */
-    _renderTokenCanvasFromCrop({ img, sx, sy, sw, sh }) {
-        // --- Шаг Г: Композитинг (Intermediate Canvas Method) ---
-        const cropCanvas = document.createElement("canvas");
-        cropCanvas.width = sw;
-        cropCanvas.height = sh;
-        const cropCtx = cropCanvas.getContext("2d");
-        cropCtx.drawImage(img, -sx, -sy);
-
+    _renderTokenCanvasFromCrop({ img, sx, sy, sw, sh, alphaPolygons = null }) {
         // --- Final Token Canvas ---
         const canvas = document.createElement("canvas");
         canvas.width = TOKEN_SIZE;
@@ -316,15 +313,97 @@ export class AutoTokenService {
         const innerRadius = innerSize / 2;
         const offset = (TOKEN_SIZE - innerSize) / 2;
 
-        // Создание круглого клиппинга для токена
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(TOKEN_SIZE / 2, TOKEN_SIZE / 2, innerRadius, 0, Math.PI * 2);
-        ctx.closePath();
-        ctx.clip();
+        const imgWidth = img.naturalWidth || img.width;
+        const imgHeight = img.naturalHeight || img.height;
 
-        // Рисуем подготовленный cropCanvas, растягивая его на innerSize
-        ctx.drawImage(cropCanvas, 0, 0, sw, sh, offset, offset, innerSize, innerSize);
+        // Рисуем всё исходное изображение в координатах токена через transform,
+        // где [sx..sx+sw] x [sy..sy+sh] проецируется на innerSize.
+        // Это важно для ручной альфы: полигоны могут выходить за базовый crop-квадрат,
+        // и тогда дополнительные фрагменты не будут преждевременно обрезаны.
+        const sourceToTokenScale = innerSize / Math.max(1, sw);
+        const destX = offset - (sx * sourceToTokenScale);
+        const destY = offset - (sy * sourceToTokenScale);
+        const destW = imgWidth * sourceToTokenScale;
+        const destH = imgHeight * sourceToTokenScale;
+        ctx.drawImage(img, destX, destY, destW, destH);
+
+        // Финальная маска: БАЗОВЫЙ КРУГ + (union) ДОПОЛНИТЕЛЬНЫЕ alpha-полигоны.
+        // Это даёт ожидаемое поведение: "круговой токен + добавленные вырезки по альфе".
+        const validOperations = Array.isArray(alphaPolygons)
+            ? alphaPolygons
+                .map((entry) => {
+                    if (Array.isArray(entry)) {
+                        return { operation: "add", points: entry };
+                    }
+
+                    const points = entry?.points;
+                    if (!Array.isArray(points)) return null;
+                    return {
+                        operation: entry?.operation === "subtract" ? "subtract" : "add",
+                        points
+                    };
+                })
+                .filter((entry) => Array.isArray(entry?.points) && entry.points.length >= 3)
+            : [];
+
+        // Добавка: пользовательские полигоны в координатах source → token
+        const traceSmoothClosedPolygon = (context, polygon, mapPoint) => {
+            if (!Array.isArray(polygon) || polygon.length < 3) return;
+
+            const mapped = polygon.map(mapPoint);
+            if (mapped.length < 3) return;
+
+            const first = mapped[0];
+            const second = mapped[1];
+            const startX = (first.x + second.x) / 2;
+            const startY = (first.y + second.y) / 2;
+
+            context.moveTo(startX, startY);
+
+            for (let i = 1; i < mapped.length; i++) {
+                const current = mapped[i];
+                const next = mapped[(i + 1) % mapped.length];
+                const midX = (current.x + next.x) / 2;
+                const midY = (current.y + next.y) / 2;
+                context.quadraticCurveTo(current.x, current.y, midX, midY);
+            }
+
+            context.closePath();
+        };
+
+        const maskCanvas = document.createElement("canvas");
+        maskCanvas.width = TOKEN_SIZE;
+        maskCanvas.height = TOKEN_SIZE;
+        const maskCtx = maskCanvas.getContext("2d");
+
+        maskCtx.clearRect(0, 0, TOKEN_SIZE, TOKEN_SIZE);
+        maskCtx.fillStyle = "#ffffff";
+
+        // 1) Базовый круг токена
+        maskCtx.beginPath();
+        maskCtx.arc(TOKEN_SIZE / 2, TOKEN_SIZE / 2, innerRadius, 0, Math.PI * 2);
+        maskCtx.closePath();
+        maskCtx.fill();
+
+        // 2) Дополнительные операции по альфе (add/subtract)
+        if (validOperations.length > 0) {
+            for (const entry of validOperations) {
+                maskCtx.save();
+                maskCtx.globalCompositeOperation = entry.operation === "subtract" ? "destination-out" : "source-over";
+                maskCtx.fillStyle = "#ffffff";
+                maskCtx.beginPath();
+                traceSmoothClosedPolygon(maskCtx, entry.points, (point) => ({
+                    x: offset + ((point.x - sx) * sourceToTokenScale),
+                    y: offset + ((point.y - sy) * sourceToTokenScale)
+                }));
+                maskCtx.fill();
+                maskCtx.restore();
+            }
+        }
+
+        ctx.save();
+        ctx.globalCompositeOperation = "destination-in";
+        ctx.drawImage(maskCanvas, 0, 0);
         ctx.restore();
 
         return canvas;

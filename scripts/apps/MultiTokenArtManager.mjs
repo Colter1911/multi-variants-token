@@ -9,7 +9,7 @@ import { AutoTokenService } from "../logic/AutoTokenService.mjs";
 import { SettingsPanel } from "./SettingsPanel.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
-const MANUAL_TOKEN_ZOOM_LIMITS = Object.freeze({ min: 0.1, max: 3 });
+const MANUAL_TOKEN_ZOOM_LIMITS = Object.freeze({ min: 0.1, max: 10 });
 
 export class MultiTokenArtManager extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
@@ -1089,44 +1089,11 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const viewportWidth = Math.max(480, window.innerWidth || 1280);
     const viewportHeight = Math.max(360, window.innerHeight || 720);
 
-    const imageWidth = image.naturalWidth || image.width || 1;
-    const imageHeight = image.naturalHeight || image.height || 1;
-    const imageRatio = Math.max(0.2, Math.min(5, imageWidth / imageHeight));
-
-    const rightPanelWidth = 280;
-    const layoutGap = 8;
-
-    // CSS paddings for .mta-manual-token-dialog: 8px left/right, 8px top, 6px bottom.
-    const contentPaddingX = 16;
-    const contentPaddingY = 14;
-    const hintLineHeight = 14;
-    const hintGap = 4;
-    const windowChrome = 38; // title bar + borders
-
-    const maxDialogWidth = Math.max(640, viewportWidth - 20);
-    const maxDialogHeight = Math.max(430, viewportHeight - 20);
-
-    const maxInnerWidth = Math.max(620, maxDialogWidth - contentPaddingX);
-    const maxLayoutHeight = Math.max(300, maxDialogHeight - windowChrome - contentPaddingY - hintLineHeight - hintGap);
-    const maxStageWidth = Math.max(320, maxInnerWidth - rightPanelWidth - layoutGap);
-
-    let stageWidth = Math.min(maxStageWidth, Math.round(maxLayoutHeight * imageRatio));
-    if (!Number.isFinite(stageWidth) || stageWidth <= 0) stageWidth = maxStageWidth;
-
-    const minStageWidth = 320;
-    stageWidth = Math.max(minStageWidth, stageWidth);
-
-    let layoutWidth = stageWidth + rightPanelWidth + layoutGap;
-    if (layoutWidth > maxInnerWidth) {
-      layoutWidth = maxInnerWidth;
-      stageWidth = Math.max(minStageWidth, layoutWidth - rightPanelWidth - layoutGap);
-    }
-
-    const stageHeight = Math.max(260, Math.round(stageWidth / imageRatio));
-    const layoutHeight = Math.min(maxLayoutHeight, stageHeight);
-
-    const width = Math.max(640, Math.min(maxDialogWidth, Math.round(layoutWidth + contentPaddingX)));
-    const height = Math.max(430, Math.min(maxDialogHeight, Math.round(layoutHeight + contentPaddingY + hintLineHeight + hintGap + windowChrome)));
+    // Фиксированный размер окна (адаптивно только при маленьком экране).
+    const DEFAULT_DIALOG_WIDTH = 1100;
+    const DEFAULT_DIALOG_HEIGHT = 720;
+    const width = Math.max(640, Math.min(DEFAULT_DIALOG_WIDTH, viewportWidth - 20));
+    const height = Math.max(430, Math.min(DEFAULT_DIALOG_HEIGHT, viewportHeight - 20));
 
     const left = Math.max(8, Math.floor((viewportWidth - width) / 2));
     const top = Math.max(8, Math.floor((viewportHeight - height) / 2));
@@ -1154,7 +1121,25 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       stageCanvas: null,
       previewCanvas: null,
       zoomValueEl: null,
+      alphaStatusEl: null,
+      alphaSnapRangeEl: null,
+      alphaSnapValueEl: null,
+      alphaToggleBtn: null,
+      alphaApplyBtn: null,
+      alphaUndoBtn: null,
+      alphaClearBtn: null,
+      edgeSnapEnabled: false,
+      edgeSnapTolerance: 50,
+      alphaDrawEnabled: false,
+      alphaCurrentStroke: null,
+      alphaCurrentStrokeMode: "add",
+      alphaPendingPolygons: [],
+      alphaAppliedPolygons: [],
+      alphaMaskVersion: 0,
+      alphaMaskAppliedVersion: -1,
       circleRadiusPx: 0,
+      fixedCircleRadiusPx: null,
+      fixedSelection: null,
       _stageSizeKey: "",
       cleanup: null,
       renderRafId: null,
@@ -1196,6 +1181,14 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
   #buildManualTokenDialogContent() {
     const previewTitle = game.i18n.localize("MTA.ManualTokenPreviewTitle");
+    const alphaEditorTitle = game.i18n.localize("MTA.ManualAlphaEditorTitle");
+    const drawToggleLabel = game.i18n.localize("MTA.ManualAlphaDrawToggle");
+    const applyAlphaLabel = game.i18n.localize("MTA.ManualAlphaApply");
+    const undoAlphaLabel = game.i18n.localize("MTA.ManualAlphaUndo");
+    const clearAlphaLabel = game.i18n.localize("MTA.ManualAlphaClear");
+    const alphaStatusIdle = game.i18n.localize("MTA.ManualAlphaStatusIdle");
+    const snapLabel = game.i18n.localize("MTA.ManualAlphaSnapLabel");
+    const snapHint = game.i18n.localize("MTA.ManualAlphaSnapHint");
     const createLabel = game.i18n.localize("MTA.CreateToken");
     const cancelLabel = game.i18n.localize("MTA.Cancel");
     const hint = game.i18n.localize("MTA.ManualTokenHint");
@@ -1212,6 +1205,24 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
             <h4>${previewTitle}</h4>
             <div class="mta-manual-preview-shell">
               <canvas class="mta-manual-preview-canvas"></canvas>
+            </div>
+
+            <div class="mta-manual-alpha-tools">
+              <h5>${alphaEditorTitle}</h5>
+              <div class="mta-manual-alpha-actions">
+                <button type="button" data-action="manual-alpha-toggle">${drawToggleLabel}</button>
+                <button type="button" data-action="manual-alpha-apply" disabled>${applyAlphaLabel}</button>
+              </div>
+              <div class="mta-manual-alpha-actions mta-manual-alpha-actions--secondary">
+                <button type="button" data-action="manual-alpha-undo" disabled>${undoAlphaLabel}</button>
+                <button type="button" data-action="manual-alpha-clear" disabled>${clearAlphaLabel}</button>
+              </div>
+              <div class="mta-manual-alpha-snap">
+                <label for="mta-manual-alpha-snap-range">${snapLabel}: <span data-field="manual-alpha-snap-value">50</span></label>
+                <input id="mta-manual-alpha-snap-range" type="range" min="0" max="100" step="1" value="50" data-field="manual-alpha-snap-range" />
+                <small>${snapHint}</small>
+              </div>
+              <p class="mta-manual-alpha-status" data-field="manual-alpha-status">${alphaStatusIdle}</p>
             </div>
 
             <div class="mta-manual-sidebar-actions">
@@ -1233,16 +1244,145 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const stageCanvas = root.querySelector(".mta-manual-stage-canvas");
     const previewCanvas = root.querySelector(".mta-manual-preview-canvas");
     const zoomValueEl = root.querySelector("[data-field='zoom-value']");
+    const alphaStatusEl = root.querySelector("[data-field='manual-alpha-status']");
+    const alphaSnapRangeEl = root.querySelector("[data-field='manual-alpha-snap-range']");
+    const alphaSnapValueEl = root.querySelector("[data-field='manual-alpha-snap-value']");
+    const alphaToggleBtn = root.querySelector("[data-action='manual-alpha-toggle']");
+    const alphaApplyBtn = root.querySelector("[data-action='manual-alpha-apply']");
+    const alphaUndoBtn = root.querySelector("[data-action='manual-alpha-undo']");
+    const alphaClearBtn = root.querySelector("[data-action='manual-alpha-clear']");
     const createBtn = root.querySelector("[data-action='manual-create-token']");
     const cancelBtn = root.querySelector("[data-action='manual-cancel']");
 
-    if (!stageCanvas || !previewCanvas || !createBtn || !cancelBtn) {
+    if (!stageCanvas || !previewCanvas || !createBtn || !cancelBtn || !alphaToggleBtn || !alphaApplyBtn || !alphaUndoBtn || !alphaClearBtn || !alphaStatusEl || !alphaSnapRangeEl || !alphaSnapValueEl) {
       return;
     }
 
     state.stageCanvas = stageCanvas;
     state.previewCanvas = previewCanvas;
     state.zoomValueEl = zoomValueEl;
+    state.alphaStatusEl = alphaStatusEl;
+    state.alphaSnapRangeEl = alphaSnapRangeEl;
+    state.alphaSnapValueEl = alphaSnapValueEl;
+    state.alphaToggleBtn = alphaToggleBtn;
+    state.alphaApplyBtn = alphaApplyBtn;
+    state.alphaUndoBtn = alphaUndoBtn;
+    state.alphaClearBtn = alphaClearBtn;
+
+    const updateSnapUi = () => {
+      if (state.alphaSnapRangeEl) {
+        state.alphaSnapRangeEl.value = String(state.edgeSnapTolerance ?? 50);
+      }
+      if (state.alphaSnapValueEl) {
+        state.alphaSnapValueEl.textContent = String(Math.round(state.edgeSnapTolerance ?? 50));
+      }
+    };
+
+    const getEdgeStrengthAtPoint = (sourcePoint) => {
+      const image = state.image;
+      const imageWidth = image.naturalWidth || image.width;
+      const imageHeight = image.naturalHeight || image.height;
+
+      const x = Math.max(1, Math.min(imageWidth - 2, Math.round(sourcePoint.x)));
+      const y = Math.max(1, Math.min(imageHeight - 2, Math.round(sourcePoint.y)));
+
+      const probeSize = 3;
+      const probeCanvas = document.createElement("canvas");
+      probeCanvas.width = probeSize;
+      probeCanvas.height = probeSize;
+      const probeCtx = probeCanvas.getContext("2d", { willReadFrequently: true });
+      if (!probeCtx) return 0;
+
+      const sx = x - 1;
+      const sy = y - 1;
+      probeCtx.drawImage(image, sx, sy, probeSize, probeSize, 0, 0, probeSize, probeSize);
+      const data = probeCtx.getImageData(0, 0, probeSize, probeSize).data;
+
+      const luminance = (idx) => {
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        return (0.299 * r) + (0.587 * g) + (0.114 * b);
+      };
+
+      const c = luminance((1 * probeSize + 1) * 4);
+      const l = luminance((1 * probeSize + 0) * 4);
+      const r = luminance((1 * probeSize + 2) * 4);
+      const u = luminance((0 * probeSize + 1) * 4);
+      const d = luminance((2 * probeSize + 1) * 4);
+
+      const gx = r - l;
+      const gy = d - u;
+      const centerContrast = Math.max(Math.abs(c - l), Math.abs(c - r), Math.abs(c - u), Math.abs(c - d));
+
+      return Math.sqrt((gx * gx) + (gy * gy)) + (centerContrast * 0.35);
+    };
+
+    const snapPointToEdge = (sourcePoint) => {
+      if (!sourcePoint) return sourcePoint;
+      if (!state.edgeSnapEnabled) return sourcePoint;
+
+      const imageWidth = state.image.naturalWidth || state.image.width;
+      const imageHeight = state.image.naturalHeight || state.image.height;
+      const tolerance = Math.max(0, Math.min(100, Number(state.edgeSnapTolerance ?? 50)));
+
+      const radius = 10;
+      const threshold = 18 + ((100 - tolerance) * 0.8);
+      let best = null;
+
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const distance = Math.sqrt((dx * dx) + (dy * dy));
+          if (distance > radius) continue;
+
+          const px = sourcePoint.x + dx;
+          const py = sourcePoint.y + dy;
+          if (px <= 1 || py <= 1 || px >= (imageWidth - 2) || py >= (imageHeight - 2)) continue;
+
+          const strength = getEdgeStrengthAtPoint({ x: px, y: py });
+          if (!Number.isFinite(strength) || strength < threshold) continue;
+
+          const score = strength - (distance * 4.5);
+          if (!best || score > best.score) {
+            best = { x: px, y: py, score };
+          }
+        }
+      }
+
+      if (!best) return sourcePoint;
+      return { x: best.x, y: best.y };
+    };
+
+    updateSnapUi();
+
+    const refreshAlphaControls = () => {
+      const hasFixedSelection = !!state.isFixed;
+      const hasPending = state.alphaPendingPolygons.length > 0;
+      const hasApplied = state.alphaAppliedPolygons.length > 0;
+      const hasCurrentStroke = !!(state.alphaCurrentStroke?.length);
+
+      alphaToggleBtn.disabled = !hasFixedSelection;
+      alphaApplyBtn.disabled = !state.alphaDrawEnabled || !hasPending;
+      alphaUndoBtn.disabled = !(hasPending || hasCurrentStroke || hasApplied);
+      alphaClearBtn.disabled = !(hasPending || hasCurrentStroke || hasApplied);
+
+      alphaToggleBtn.classList.toggle("is-active", state.alphaDrawEnabled);
+      stageCanvas.classList.toggle("is-alpha-draw", state.alphaDrawEnabled);
+
+      if (!hasFixedSelection) {
+        alphaStatusEl.textContent = game.i18n.localize("MTA.ManualAlphaStatusNeedLock");
+      } else if (state.alphaDrawEnabled) {
+        const count = state.alphaPendingPolygons.length;
+        alphaStatusEl.textContent = game.i18n.format("MTA.ManualAlphaStatusDrawing", { count });
+      } else if (state.alphaAppliedPolygons.length > 0) {
+        const count = state.alphaAppliedPolygons.length;
+        alphaStatusEl.textContent = game.i18n.format("MTA.ManualAlphaStatusApplied", { count });
+      } else {
+        alphaStatusEl.textContent = game.i18n.localize("MTA.ManualAlphaStatusIdle");
+      }
+    };
+
+    state.alphaRefreshControls = refreshAlphaControls;
 
     const scheduleStageRender = () => {
       if (state.renderRafId) {
@@ -1253,6 +1393,75 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         state.renderRafId = null;
         this.#renderManualTokenStage(state);
       });
+    };
+
+    const MIN_STROKE_POINT_DISTANCE_PX = 5;
+    const MIN_POLYGON_AREA_PX = 20;
+
+    const toSourcePointFromEvent = (event) => {
+      if (!state.metrics) return null;
+      const rect = stageCanvas.getBoundingClientRect();
+      return this.#manualCanvasToSourcePoint(state, event.clientX - rect.left, event.clientY - rect.top);
+    };
+
+    const computePolygonArea = (points) => {
+      if (!Array.isArray(points) || points.length < 3) return 0;
+      let area = 0;
+      for (let i = 0; i < points.length; i++) {
+        const p1 = points[i];
+        const p2 = points[(i + 1) % points.length];
+        area += (p1.x * p2.y) - (p2.x * p1.y);
+      }
+      return Math.abs(area) * 0.5;
+    };
+
+    const appendStrokePoint = (point) => {
+      if (!point || !state.alphaCurrentStroke) return false;
+      const stroke = state.alphaCurrentStroke;
+      const lastPoint = stroke[stroke.length - 1];
+      if (!lastPoint) {
+        stroke.push({ x: point.x, y: point.y });
+        return true;
+      }
+
+      const dx = point.x - lastPoint.x;
+      const dy = point.y - lastPoint.y;
+      if ((dx * dx + dy * dy) < (MIN_STROKE_POINT_DISTANCE_PX * MIN_STROKE_POINT_DISTANCE_PX)) {
+        return false;
+      }
+
+      stroke.push({ x: point.x, y: point.y });
+      return true;
+    };
+
+    const finalizeAlphaStroke = () => {
+      if (!state.alphaCurrentStroke) return false;
+
+      const strokeMode = state.alphaCurrentStrokeMode === "subtract" ? "subtract" : "add";
+      const polygon = state.alphaCurrentStroke.map((point) => ({ x: point.x, y: point.y }));
+      state.alphaCurrentStroke = null;
+      state.alphaCurrentStrokeMode = "add";
+
+      if (polygon.length < 3) return false;
+      const area = computePolygonArea(polygon);
+      if (!Number.isFinite(area) || area < MIN_POLYGON_AREA_PX) return false;
+
+      state.alphaPendingPolygons.push({
+        operation: strokeMode,
+        points: polygon
+      });
+      state.alphaMaskVersion += 1;
+      return true;
+    };
+
+    const clearAlphaState = () => {
+      state.alphaDrawEnabled = false;
+      state.alphaCurrentStroke = null;
+      state.alphaCurrentStrokeMode = "add";
+      state.alphaPendingPolygons = [];
+      state.alphaAppliedPolygons = [];
+      state.alphaMaskVersion = 0;
+      state.alphaMaskAppliedVersion = -1;
     };
 
     const onMouseMove = (event) => {
@@ -1267,6 +1476,18 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         state.panX = state.panStart.panX + deltaX;
         state.panY = state.panStart.panY + deltaY;
         this.#renderManualTokenStage(state);
+        return;
+      }
+
+      if (state.alphaDrawEnabled && state.alphaCurrentStroke) {
+        let point = this.#manualCanvasToSourcePoint(state, canvasX, canvasY);
+        point = snapPointToEdge(point);
+        if (point) appendStrokePoint(point);
+        this.#renderManualTokenStage(state);
+        return;
+      }
+
+      if (state.alphaDrawEnabled) {
         return;
       }
 
@@ -1285,6 +1506,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     };
 
     const onMouseLeave = () => {
+      if (state.alphaDrawEnabled) return;
       if (!state.isFixed && !state.isPanning) {
         state.hoverSource = null;
         this.#renderManualTokenStage(state);
@@ -1296,6 +1518,25 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     };
 
     const onMouseDown = (event) => {
+      if (event.button === 0 && state.alphaDrawEnabled) {
+        event.preventDefault();
+        if (!state.isFixed) {
+          refreshAlphaControls();
+          return;
+        }
+
+        const point = toSourcePointFromEvent(event);
+        if (!point) return;
+
+        state.edgeSnapEnabled = !!event.ctrlKey;
+        state.alphaCurrentStrokeMode = event.altKey ? "subtract" : "add";
+        const snappedStart = snapPointToEdge(point);
+        state.alphaCurrentStroke = [{ x: snappedStart.x, y: snappedStart.y }];
+        refreshAlphaControls();
+        this.#renderManualTokenStage(state);
+        return;
+      }
+
       if (event.button !== 2) return;
       event.preventDefault();
 
@@ -1310,6 +1551,14 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     };
 
     const onMouseUp = (event) => {
+      if (event.button === 0 && state.alphaCurrentStroke) {
+        finalizeAlphaStroke();
+        state.edgeSnapEnabled = false;
+        refreshAlphaControls();
+        this.#renderManualTokenStage(state);
+        return;
+      }
+
       if (!state.isPanning) return;
       if (event.button !== 2 && (event.buttons & 2) === 2) return;
 
@@ -1322,10 +1571,15 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const onClick = (event) => {
       if (event.button !== 0) return;
       if (state.isPanning) return;
+      if (state.alphaDrawEnabled) return;
 
       if (state.isFixed) {
         state.isFixed = false;
         state.fixedSource = null;
+        state.fixedCircleRadiusPx = null;
+        state.fixedSelection = null;
+        clearAlphaState();
+        refreshAlphaControls();
         this.#renderManualTokenStage(state);
         return;
       }
@@ -1337,23 +1591,42 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       state.isFixed = true;
       state.fixedSource = point;
       state.hoverSource = point;
+      state.fixedCircleRadiusPx = state.circleRadiusPx;
+      const lockDrawScale = Math.max(0.0001, state.metrics?.drawScale ?? 1);
+      const lockCropSize = (state.circleRadiusPx * 2) / lockDrawScale;
+      state.fixedSelection = {
+        centerX: point.x,
+        centerY: point.y,
+        cropSize: lockCropSize
+      };
+      clearAlphaState();
+      refreshAlphaControls();
       this.#renderManualTokenStage(state);
     };
 
     const onWheel = (event) => {
       event.preventDefault();
+      if (state.alphaCurrentStroke) return;
 
       if (!state.metrics) return;
       const rect = stageCanvas.getBoundingClientRect();
-      const pointerCanvasX = event.clientX - rect.left;
-      const pointerCanvasY = event.clientY - rect.top;
+      let anchorCanvasX = event.clientX - rect.left;
+      let anchorCanvasY = event.clientY - rect.top;
       const previousMetrics = state.metrics;
 
       const previousDrawScale = previousMetrics.drawScale;
       if (!Number.isFinite(previousDrawScale) || previousDrawScale <= 0) return;
 
-      const sourceXBeforeZoom = (pointerCanvasX - previousMetrics.offsetX) / previousDrawScale;
-      const sourceYBeforeZoom = (pointerCanvasY - previousMetrics.offsetY) / previousDrawScale;
+      let sourceXBeforeZoom = (anchorCanvasX - previousMetrics.offsetX) / previousDrawScale;
+      let sourceYBeforeZoom = (anchorCanvasY - previousMetrics.offsetY) / previousDrawScale;
+
+      // В режиме фиксации зум якорится в фиксированной точке круга, чтобы выборка не "уплывала".
+      if (state.isFixed && state.fixedSource) {
+        sourceXBeforeZoom = state.fixedSource.x;
+        sourceYBeforeZoom = state.fixedSource.y;
+        anchorCanvasX = previousMetrics.offsetX + (sourceXBeforeZoom * previousDrawScale);
+        anchorCanvasY = previousMetrics.offsetY + (sourceYBeforeZoom * previousDrawScale);
+      }
 
       const zoomStep = event.deltaY < 0 ? 1.1 : (1 / 1.1);
       const nextZoom = Math.min(state.zoomMax, Math.max(state.zoomMin, state.zoom * zoomStep));
@@ -1374,17 +1647,123 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       const safeSourceX = Number.isFinite(sourceXBeforeZoom) ? sourceXBeforeZoom : (imageWidth / 2);
       const safeSourceY = Number.isFinite(sourceYBeforeZoom) ? sourceYBeforeZoom : (imageHeight / 2);
 
-      const targetOffsetX = pointerCanvasX - (safeSourceX * nextDrawScale);
-      const targetOffsetY = pointerCanvasY - (safeSourceY * nextDrawScale);
+      const targetOffsetX = anchorCanvasX - (safeSourceX * nextDrawScale);
+      const targetOffsetY = anchorCanvasY - (safeSourceY * nextDrawScale);
 
       state.panX = targetOffsetX - baseOffsetX;
       state.panY = targetOffsetY - baseOffsetY;
       this.#renderManualTokenStage(state);
     };
 
+    const onAlphaToggle = () => {
+      if (!state.isFixed) {
+        ui.notifications.warn(game.i18n.localize("MTA.ManualAlphaNeedLock"));
+        refreshAlphaControls();
+        return;
+      }
+
+      state.alphaDrawEnabled = !state.alphaDrawEnabled;
+      if (!state.alphaDrawEnabled) {
+        state.alphaCurrentStroke = null;
+        state.alphaCurrentStrokeMode = "add";
+      }
+
+      refreshAlphaControls();
+      this.#renderManualTokenStage(state);
+    };
+
+    const onAlphaApply = () => {
+      if (!state.isFixed) {
+        ui.notifications.warn(game.i18n.localize("MTA.ManualAlphaNeedLock"));
+        refreshAlphaControls();
+        return;
+      }
+
+      if (state.alphaCurrentStroke) {
+        finalizeAlphaStroke();
+      }
+
+      if (state.alphaPendingPolygons.length === 0) {
+        refreshAlphaControls();
+        return;
+      }
+
+      const operationsToApply = state.alphaPendingPolygons
+        .map((entry) => {
+          const points = Array.isArray(entry) ? entry : entry?.points;
+          if (!Array.isArray(points) || points.length < 3) return null;
+          return {
+            operation: entry?.operation === "subtract" ? "subtract" : "add",
+            points: points.map((p) => ({ x: p.x, y: p.y }))
+          };
+        })
+        .filter(Boolean);
+
+      state.alphaAppliedPolygons.push(...operationsToApply);
+      state.alphaPendingPolygons = [];
+      state.alphaMaskVersion += 1;
+      state.alphaMaskAppliedVersion = state.alphaMaskVersion;
+
+      refreshAlphaControls();
+      this.#renderManualTokenStage(state);
+    };
+
+    const onAlphaUndo = () => {
+      let changed = false;
+
+      if (state.alphaCurrentStroke) {
+        state.alphaCurrentStroke = null;
+        changed = true;
+      } else if (state.alphaPendingPolygons.length > 0) {
+        state.alphaPendingPolygons.pop();
+        changed = true;
+      } else if (state.alphaAppliedPolygons.length > 0) {
+        state.alphaAppliedPolygons.pop();
+        changed = true;
+      }
+
+      if (!changed) {
+        refreshAlphaControls();
+        return;
+      }
+
+      state.alphaMaskVersion += 1;
+      refreshAlphaControls();
+      this.#renderManualTokenStage(state);
+    };
+
+    const onAlphaClear = () => {
+      if (!state.alphaCurrentStroke && state.alphaPendingPolygons.length === 0 && state.alphaAppliedPolygons.length === 0) {
+        refreshAlphaControls();
+        return;
+      }
+
+      state.alphaCurrentStroke = null;
+      state.alphaCurrentStrokeMode = "add";
+      state.alphaPendingPolygons = [];
+      state.alphaAppliedPolygons = [];
+      state.alphaMaskVersion += 1;
+      state.alphaMaskAppliedVersion = -1;
+
+      refreshAlphaControls();
+      this.#renderManualTokenStage(state);
+    };
+
+    const onSnapRangeInput = (event) => {
+      const raw = Number(event.currentTarget?.value ?? state.edgeSnapTolerance);
+      const nextValue = Math.max(0, Math.min(100, Number.isFinite(raw) ? raw : 50));
+      state.edgeSnapTolerance = nextValue;
+      updateSnapUi();
+    };
+
     const onCreate = async () => {
       if (!state.selection) {
         ui.notifications.warn(game.i18n.localize("MTA.ManualTokenSelectArea"));
+        return;
+      }
+
+      if (state.alphaCurrentStroke || state.alphaPendingPolygons.length > 0) {
+        ui.notifications.warn(game.i18n.localize("MTA.ManualAlphaPendingNotApplied"));
         return;
       }
 
@@ -1396,7 +1775,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           imageSource: state.image,
           centerX: state.selection.centerX,
           centerY: state.selection.centerY,
-          cropSize: state.selection.cropSize
+          cropSize: state.selection.cropSize,
+          alphaPolygons: state.alphaAppliedPolygons
         });
 
         const saved = await this.#persistGeneratedTokenBlob({
@@ -1432,6 +1812,11 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     stageCanvas.addEventListener("click", onClick);
     stageCanvas.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("mouseup", onMouseUp);
+    alphaToggleBtn.addEventListener("click", onAlphaToggle);
+    alphaApplyBtn.addEventListener("click", onAlphaApply);
+    alphaUndoBtn.addEventListener("click", onAlphaUndo);
+    alphaClearBtn.addEventListener("click", onAlphaClear);
+    alphaSnapRangeEl.addEventListener("input", onSnapRangeInput);
     createBtn.addEventListener("click", onCreate);
     cancelBtn.addEventListener("click", onCancel);
     window.addEventListener("resize", onWindowResize);
@@ -1453,6 +1838,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       stageCanvas.removeEventListener("wheel", onWheel);
       window.removeEventListener("mouseup", onMouseUp);
       stageCanvas.classList.remove("is-panning");
+      stageCanvas.classList.remove("is-alpha-draw");
       if (state.resizeObserver) {
         state.resizeObserver.disconnect();
         state.resizeObserver = null;
@@ -1465,10 +1851,18 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         clearTimeout(state.initialRenderTimeout);
         state.initialRenderTimeout = null;
       }
+      alphaToggleBtn.removeEventListener("click", onAlphaToggle);
+      alphaApplyBtn.removeEventListener("click", onAlphaApply);
+      alphaUndoBtn.removeEventListener("click", onAlphaUndo);
+      alphaClearBtn.removeEventListener("click", onAlphaClear);
+      alphaSnapRangeEl.removeEventListener("input", onSnapRangeInput);
       createBtn.removeEventListener("click", onCreate);
       cancelBtn.removeEventListener("click", onCancel);
       window.removeEventListener("resize", onWindowResize);
+      state.alphaRefreshControls = null;
     };
+
+    refreshAlphaControls();
 
     // Двойной стартовый рендер нужен, чтобы избежать визуального сжатия до
     // окончательной раскладки окна (наблюдалось до первого движения мыши).
@@ -1578,17 +1972,147 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       offsetY
     };
 
+    const drawSourceStrokePath = (ctx2d, points, drawScaleLocal, offsetXLocal, offsetYLocal) => {
+      if (!Array.isArray(points) || points.length === 0) return;
+      const first = points[0];
+      ctx2d.moveTo(offsetXLocal + (first.x * drawScaleLocal), offsetYLocal + (first.y * drawScaleLocal));
+      for (let i = 1; i < points.length; i++) {
+        const p = points[i];
+        ctx2d.lineTo(offsetXLocal + (p.x * drawScaleLocal), offsetYLocal + (p.y * drawScaleLocal));
+      }
+    };
+
+    const drawSourcePolygonFill = (ctx2d, polygon, drawScaleLocal, offsetXLocal, offsetYLocal) => {
+      if (!Array.isArray(polygon) || polygon.length < 3) return;
+      ctx2d.beginPath();
+      drawSourceStrokePath(ctx2d, polygon, drawScaleLocal, offsetXLocal, offsetYLocal);
+      ctx2d.closePath();
+      ctx2d.fill();
+    };
+
+    const drawSourcePathStroke = (ctx2d, points, drawScaleLocal, offsetXLocal, offsetYLocal) => {
+      if (!Array.isArray(points) || points.length < 2) return;
+      ctx2d.beginPath();
+      drawSourceStrokePath(ctx2d, points, drawScaleLocal, offsetXLocal, offsetYLocal);
+      ctx2d.stroke();
+    };
+
     const stageSizeKey = `${width}x${height}`;
     if (state._stageSizeKey !== stageSizeKey || state.circleRadiusPx <= 0) {
       state.circleRadiusPx = Math.max(42, Math.min(width, height) * 0.22);
       state._stageSizeKey = stageSizeKey;
     }
 
+    const computedCropSize = (state.circleRadiusPx * 2) / drawScale;
+    const lockedCropSize = Number.isFinite(state.fixedSelection?.cropSize)
+      ? state.fixedSelection.cropSize
+      : computedCropSize;
+
+    // В lock-режиме фиксируем область в координатах исходника (cropSize),
+    // а радиус круга на экране пересчитываем через текущий drawScale,
+    // чтобы круг "жил" вместе с изображением в левом окне.
+    const effectiveCropSize = state.isFixed ? lockedCropSize : computedCropSize;
+    const effectiveCircleRadiusPx = (effectiveCropSize * drawScale) / 2;
+
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(state.image, offsetX, offsetY, drawWidth, drawHeight);
+
+    const drawOperationOverlay = (entry, { isPending = false } = {}) => {
+      const operation = entry?.operation === "subtract" ? "subtract" : "add";
+      const points = Array.isArray(entry?.points)
+        ? entry.points
+        : (Array.isArray(entry) ? entry : null);
+      if (!points || points.length < 3) return;
+
+      ctx.save();
+      if (operation === "subtract") {
+        ctx.fillStyle = isPending ? "rgba(255, 72, 72, 0.48)" : "rgba(255, 72, 72, 0.58)";
+      } else {
+        ctx.fillStyle = isPending ? "rgba(255, 166, 87, 0.42)" : "rgba(34, 211, 238, 0.45)";
+      }
+      drawSourcePolygonFill(ctx, points, drawScale, offsetX, offsetY);
+      ctx.restore();
+    };
+
+    const normalizeAlphaEntry = (entry, fallbackOperation = "add") => {
+      if (Array.isArray(entry)) {
+        return {
+          operation: fallbackOperation,
+          points: entry
+        };
+      }
+
+      const points = entry?.points;
+      if (!Array.isArray(points)) return null;
+      return {
+        operation: entry?.operation === "subtract" ? "subtract" : fallbackOperation,
+        points
+      };
+    };
+
+    const renderCompositedAlphaOverlay = (entries) => {
+      if (!Array.isArray(entries) || entries.length === 0) return;
+
+      const overlayCanvas = document.createElement("canvas");
+      overlayCanvas.width = stageCanvas.width;
+      overlayCanvas.height = stageCanvas.height;
+      const overlayCtx = overlayCanvas.getContext("2d");
+      if (!overlayCtx) return;
+
+      overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      overlayCtx.clearRect(0, 0, width, height);
+      overlayCtx.fillStyle = "#ffffff";
+
+      for (const rawEntry of entries) {
+        const entry = normalizeAlphaEntry(rawEntry);
+        if (!entry || !Array.isArray(entry.points) || entry.points.length < 3) continue;
+
+        overlayCtx.save();
+        overlayCtx.globalCompositeOperation = entry.operation === "subtract" ? "destination-out" : "source-over";
+        drawSourcePolygonFill(overlayCtx, entry.points, drawScale, offsetX, offsetY);
+        overlayCtx.restore();
+      }
+
+      overlayCtx.save();
+      overlayCtx.globalCompositeOperation = "source-in";
+      overlayCtx.fillStyle = "#22d3ee";
+      overlayCtx.fillRect(0, 0, width, height);
+      overlayCtx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = 0.52;
+      ctx.drawImage(overlayCanvas, 0, 0, width, height);
+      ctx.restore();
+    };
+
+    const overlayEntries = [
+      ...state.alphaAppliedPolygons,
+      ...state.alphaPendingPolygons
+    ];
+
+    if (Array.isArray(state.alphaCurrentStroke) && state.alphaCurrentStroke.length >= 3) {
+      overlayEntries.push({
+        operation: state.alphaCurrentStrokeMode === "subtract" ? "subtract" : "add",
+        points: state.alphaCurrentStroke
+      });
+    }
+
+    renderCompositedAlphaOverlay(overlayEntries);
+
+    if (state.alphaCurrentStroke?.length > 1) {
+      const isSubtractStroke = state.alphaCurrentStrokeMode === "subtract";
+      ctx.save();
+      ctx.lineWidth = 2.4;
+      ctx.strokeStyle = isSubtractStroke ? "#8de8ff" : "#ffd08a";
+      ctx.shadowColor = isSubtractStroke ? "rgba(34, 211, 238, 0.55)" : "rgba(255, 190, 100, 0.55)";
+      ctx.shadowBlur = 4;
+      ctx.setLineDash([8, 6]);
+      drawSourcePathStroke(ctx, state.alphaCurrentStroke, drawScale, offsetX, offsetY);
+      ctx.restore();
+    }
 
     const activeSource = state.isFixed ? state.fixedSource : state.hoverSource;
     if (!activeSource) {
@@ -1605,8 +2129,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
     ctx.beginPath();
     ctx.rect(0, 0, width, height);
-    ctx.moveTo(circleX + state.circleRadiusPx, circleY);
-    ctx.arc(circleX, circleY, state.circleRadiusPx, 0, Math.PI * 2, true);
+    ctx.moveTo(circleX + effectiveCircleRadiusPx, circleY);
+    ctx.arc(circleX, circleY, effectiveCircleRadiusPx, 0, Math.PI * 2, true);
     ctx.fill("evenodd");
     ctx.restore();
 
@@ -1616,7 +2140,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
     ctx.shadowBlur = 6;
     ctx.beginPath();
-    ctx.arc(circleX, circleY, state.circleRadiusPx, 0, Math.PI * 2);
+    ctx.arc(circleX, circleY, effectiveCircleRadiusPx, 0, Math.PI * 2);
     ctx.stroke();
     if (state.isFixed) {
       ctx.fillStyle = "#22d3ee";
@@ -1626,14 +2150,25 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     }
     ctx.restore();
 
-    const cropSize = (state.circleRadiusPx * 2) / drawScale;
+    const cropSize = effectiveCropSize;
+
+    const selectionCenterX = state.isFixed && Number.isFinite(state.fixedSelection?.centerX)
+      ? state.fixedSelection.centerX
+      : activeSource.x;
+    const selectionCenterY = state.isFixed && Number.isFinite(state.fixedSelection?.centerY)
+      ? state.fixedSelection.centerY
+      : activeSource.y;
+
     state.selection = {
-      centerX: activeSource.x,
-      centerY: activeSource.y,
+      centerX: selectionCenterX,
+      centerY: selectionCenterY,
       cropSize
     };
 
     this.#renderManualTokenPreview(state);
+    if (typeof state.alphaRefreshControls === "function") {
+      state.alphaRefreshControls();
+    }
     if (state.zoomValueEl) state.zoomValueEl.textContent = `${state.zoom.toFixed(2)}x`;
   }
 
@@ -1662,7 +2197,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       image: state.image,
       centerX: state.selection.centerX,
       centerY: state.selection.centerY,
-      cropSize: state.selection.cropSize
+      cropSize: state.selection.cropSize,
+      alphaPolygons: state.alphaAppliedPolygons
     });
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

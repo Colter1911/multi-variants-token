@@ -862,6 +862,10 @@
   cursor: grabbing;
 }
 
+.mta-manual-stage-canvas.is-alpha-draw {
+  cursor: cell;
+}
+
 .mta-manual-zoom-badge {
   position: absolute;
   right: 8px;
@@ -893,6 +897,72 @@
   color: var(--mta-text-header);
   border-bottom: 1px solid rgba(159, 146, 117, 0.35);
   padding-bottom: 4px;
+}
+
+.mta-manual-alpha-tools {
+  border: 1px solid rgba(159, 146, 117, 0.35);
+  border-radius: 8px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mta-manual-alpha-tools h5 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mta-text-header);
+}
+
+.mta-manual-alpha-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.mta-manual-alpha-actions button {
+  min-height: 28px;
+}
+
+.mta-manual-alpha-actions--secondary {
+  grid-template-columns: 1fr 1fr;
+}
+
+.mta-manual-alpha-status {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--mta-text-muted);
+  min-height: 28px;
+}
+
+.mta-manual-alpha-snap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mta-manual-alpha-snap label {
+  font-size: 11px;
+  color: var(--mta-text-muted);
+}
+
+.mta-manual-alpha-snap input[type="range"] {
+  width: 100%;
+}
+
+.mta-manual-alpha-snap small {
+  color: rgba(214, 204, 178, 0.72);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.mta-manual-token-sidebar [data-action="manual-alpha-toggle"].is-active {
+  border-color: var(--mta-cyan);
+  color: var(--mta-cyan);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.35);
 }
 
 .mta-manual-preview-shell {
