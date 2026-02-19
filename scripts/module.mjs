@@ -167,12 +167,21 @@ Hooks.on("updateToken", (tokenDocument, changes, options) => {
   void runAutoActivation({ actor, tokenDocument });
 });
 
-Hooks.on("createToken", (tokenDocument) => {
+Hooks.on("createToken", async (tokenDocument) => {
   console.log("[MTA] createToken hook fired", { tokenName: tokenDocument.name });
   const actor = tokenDocument.actor;
   if (!actor) return;
 
   const data = getActorModuleData(actor);
+
+  // При копировании/вставке токена флаги активного образа обычно уже присутствуют.
+  // В таком случае не перезаписываем их дефолтным/рандомным изображением до автоактивации.
+  const hasExistingTokenSelection = Boolean(
+    tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID)
+  );
+  const hasExistingPortraitSelection = Boolean(
+    tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID)
+  );
 
   const initialTokenImage = data.global.tokenRandom
     ? pickRandomImage(data.tokenImages)
@@ -182,12 +191,14 @@ Hooks.on("createToken", (tokenDocument) => {
     ? pickRandomImage(data.portraitImages)
     : data.portraitImages.find((image) => image.isDefault) ?? null;
 
-  if (initialTokenImage) void applyTokenImageById({ actor, tokenDocument, imageId: initialTokenImage.id });
-  if (initialPortraitImage && !data.global.linkTokenPortrait) {
-    void applyPortraitById({ actor, tokenDocument, imageId: initialPortraitImage.id });
+  if (!hasExistingTokenSelection && initialTokenImage) {
+    await applyTokenImageById({ actor, tokenDocument, imageId: initialTokenImage.id });
+  }
+  if (!hasExistingPortraitSelection && initialPortraitImage && !data.global.linkTokenPortrait) {
+    await applyPortraitById({ actor, tokenDocument, imageId: initialPortraitImage.id });
   }
 
-  void runAutoActivation({ actor, tokenDocument });
+  await runAutoActivation({ actor, tokenDocument });
 });
 
 Hooks.on("renderActorSheet", (sheet, html) => {
