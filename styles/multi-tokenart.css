@@ -611,7 +611,14 @@
   color: var(--mta-accent);
 }
 
-
+.multi-tokenart .mta-settings-panel input[name="autoEnable.woundedPercent"] {
+  width: 4.5ch;
+  min-width: 4.5ch;
+  max-width: 4.5ch;
+  flex: 0 0 auto;
+  margin-left: auto;
+  text-align: right;
+}
 
 /* Form Inputs */
 .multi-tokenart input[type="text"],
