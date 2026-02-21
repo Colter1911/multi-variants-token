@@ -868,11 +868,54 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     await setActorModuleData(this.actor, data);
 
+    let defaultApplied = false;
+
+    // Default image is the "base" state for the actor.
+    // Apply it immediately so actor/prototype reflect the configured source art.
+    if (isDefault) {
+      if (imageType === IMAGE_TYPES.TOKEN) {
+        await applyTokenImageById({
+          actor: this.actor,
+          tokenDocument: null,
+          imageObject: image
+        });
+
+        if (this.tokenDocument) {
+          await applyTokenImageById({
+            actor: this.actor,
+            tokenDocument: this.tokenDocument,
+            imageObject: image
+          });
+        }
+      } else {
+        await applyPortraitById({
+          actor: this.actor,
+          tokenDocument: null,
+          imageObject: image
+        });
+
+        if (this.tokenDocument) {
+          await applyPortraitById({
+            actor: this.actor,
+            tokenDocument: this.tokenDocument,
+            imageObject: image
+          });
+        }
+      }
+
+      defaultApplied = true;
+    }
+
     // Auto-update if this image is currently active
-    if (imageType === IMAGE_TYPES.TOKEN) {
+    if (imageType === IMAGE_TYPES.TOKEN && !defaultApplied) {
       if (this.tokenDocument) {
         const activeId = this.tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
-        if (activeId === image.id) {
+        const currentTokenSrc = this.tokenDocument.texture?.src;
+        const hasKnownActiveFlag = Boolean(activeId) && list.some((img) => img?.id === activeId);
+        const isActiveByTextureFallback = !hasKnownActiveFlag
+          && (currentTokenSrc === previousSrc || currentTokenSrc === image.src);
+
+        if (activeId === image.id || isActiveByTextureFallback) {
           await applyTokenImageById({
             actor: this.actor,
             tokenDocument: this.tokenDocument,
@@ -889,7 +932,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           });
         }
       }
-    } else {
+    } else if (!defaultApplied) {
       const actorImg = this.actor?.img;
       const activePortraitId = this.tokenDocument
         ? this.tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID)

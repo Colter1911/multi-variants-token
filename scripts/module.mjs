@@ -1,14 +1,16 @@
-import { MODULE_ID, TOKEN_FLAG_KEYS } from "./constants.mjs";
+import { MODULE_ID, SETTINGS, TOKEN_FLAG_KEYS } from "./constants.mjs";
 import { registerSettings, applySystemPresetIfNeeded } from "./settings.mjs";
 import { registerTokenHudButton, openManagerForTokenDocument, openManagerForActor } from "./ui/TokenHUD.mjs";
 import { registerFileSocketHandlers } from "./utils/file-utils.mjs";
 import { runAutoActivation, applyTokenImageById, applyPortraitById } from "./logic/AutoActivation.mjs";
 import { pickRandomImage } from "./logic/RandomMode.mjs";
-import { getActorModuleData } from "./utils/flag-utils.mjs";
+import { actorHasModuleFlags, getActorModuleData } from "./utils/flag-utils.mjs";
 
 console.log("✅ Multi Token Art | module.mjs loaded");
 
 const ACTOR_SHEET_BUTTON_CLASS = `${MODULE_ID}-open-manager-sheet-button`;
+const FALLBACK_HP_CURRENT_PATH = "system.attributes.hp.value";
+const FALLBACK_HP_MAX_PATH = "system.attributes.hp.max";
 
 function openManagerForControlledToken() {
   const controlled = canvas?.tokens?.controlled?.[0]?.document ?? null;
@@ -81,6 +83,55 @@ function registerActorHeaderButtons() {
   }
 }
 
+function getConfiguredHpPaths() {
+  const currentPath = game.settings.get(MODULE_ID, SETTINGS.HP_CURRENT_PATH) || FALLBACK_HP_CURRENT_PATH;
+  const maxPath = game.settings.get(MODULE_ID, SETTINGS.HP_MAX_PATH) || FALLBACK_HP_MAX_PATH;
+  return { currentPath, maxPath };
+}
+
+function getParentPath(path) {
+  if (typeof path !== "string") return null;
+  const index = path.lastIndexOf(".");
+  if (index <= 0) return null;
+  return path.slice(0, index);
+}
+
+function hasChangedPathOrParent(changes, path) {
+  if (!changes || !path) return false;
+  if (foundry.utils.hasProperty(changes, path)) return true;
+
+  const parentPath = getParentPath(path);
+  if (parentPath && foundry.utils.hasProperty(changes, parentPath)) return true;
+
+  return false;
+}
+
+function hasActorHpLikeChange(changes) {
+  const { currentPath, maxPath } = getConfiguredHpPaths();
+  return hasChangedPathOrParent(changes, currentPath) || hasChangedPathOrParent(changes, maxPath);
+}
+
+function hasTokenHpLikeChange(changes) {
+  if (!changes) return false;
+
+  const { currentPath, maxPath } = getConfiguredHpPaths();
+  const hpPaths = [currentPath, maxPath];
+  const prefixes = ["delta", "actorData", "actorData.data"];
+
+  for (const hpPath of hpPaths) {
+    if (!hpPath) continue;
+
+    const parentPath = getParentPath(hpPath);
+
+    for (const prefix of prefixes) {
+      if (foundry.utils.hasProperty(changes, `${prefix}.${hpPath}`)) return true;
+      if (parentPath && foundry.utils.hasProperty(changes, `${prefix}.${parentPath}`)) return true;
+    }
+  }
+
+  return false;
+}
+
 function setModuleApi() {
   const module = game.modules.get(MODULE_ID);
   if (!module) return;
@@ -99,7 +150,7 @@ function setModuleApi() {
 }
 
 function runAutoActivationForActorTokens(actor) {
-  if (!actor) return;
+  if (!actor || !actorHasModuleFlags(actor)) return;
 
   for (const token of actor.getActiveTokens(true)) {
     const tokenDocument = token.document;
@@ -149,10 +200,12 @@ Hooks.on("updateActor", (actor, changes, options) => {
     console.log("[MTA] Ignoring manual update (mtaManualUpdate=true)");
     return;
   }
-  // Проверяем что изменились именно HP (более точная проверка чем просто "system")
-  const hpChanged = foundry.utils.hasProperty(changes, "system.attributes.hp") ||
-    foundry.utils.hasProperty(changes, "system.attributes.hp.value") ||
-    foundry.utils.hasProperty(changes, "system");
+
+  if (!actorHasModuleFlags(actor)) {
+    return;
+  }
+
+  const hpChanged = hasActorHpLikeChange(changes);
   if (!hpChanged) {
     console.log("[MTA] HP not changed, skipping");
     return;
@@ -170,11 +223,13 @@ Hooks.on("updateToken", (tokenDocument, changes, options) => {
     console.log("[MTA] Ignoring manual update (mtaManualUpdate=true)");
     return;
   }
-  const hpLikeChanged = foundry.utils.hasProperty(changes, "delta") || foundry.utils.hasProperty(changes, "actorData");
-  if (!hpLikeChanged) return;
 
   const actor = tokenDocument.actor;
   if (!actor) return;
+  if (!actorHasModuleFlags(actor)) return;
+
+  const hpLikeChanged = hasTokenHpLikeChange(changes);
+  if (!hpLikeChanged) return;
 
   void runAutoActivation({ actor, tokenDocument });
 });
@@ -209,31 +264,64 @@ Hooks.on("createToken", async (tokenDocument) => {
   console.log("[MTA] createToken hook fired", { tokenName: tokenDocument.name });
   const actor = tokenDocument.actor;
   if (!actor) return;
+  if (!actorHasModuleFlags(actor)) return;
 
   const data = getActorModuleData(actor);
+  const tokenImages = data.tokenImages ?? [];
+  const portraitImages = data.portraitImages ?? [];
+
+  const currentTokenSrc = tokenDocument.texture?.src ?? null;
+  const currentPortraitSrc = actor.img ?? null;
+
+  const defaultTokenImage = tokenImages.find((image) => image?.isDefault) ?? null;
+  const defaultPortraitImage = portraitImages.find((image) => image?.isDefault) ?? null;
+
+  const matchedTokenByCurrentSrc = currentTokenSrc
+    ? tokenImages.find((image) => image?.src === currentTokenSrc) ?? null
+    : null;
+
+  const matchedPortraitByCurrentSrc = currentPortraitSrc
+    ? portraitImages.find((image) => image?.src === currentPortraitSrc) ?? null
+    : null;
+
+  const rawActiveTokenImageId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
+  const rawActivePortraitImageId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
+
+  const selectedTokenImage = tokenImages.find((image) => image?.id === rawActiveTokenImageId)
+    ?? matchedTokenByCurrentSrc
+    ?? defaultTokenImage;
 
   // При копировании/вставке токена флаги активного образа обычно уже присутствуют.
   // В таком случае не перезаписываем их дефолтным/рандомным изображением до автоактивации.
-  const hasExistingTokenSelection = Boolean(
-    tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID)
-  );
-  const hasExistingPortraitSelection = Boolean(
-    tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID)
-  );
+  const hasExistingTokenSelection = Boolean(rawActiveTokenImageId);
+  const hasExistingPortraitSelection = Boolean(rawActivePortraitImageId);
+
+  if (!hasExistingTokenSelection && matchedTokenByCurrentSrc?.id) {
+    await tokenDocument.setFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID, matchedTokenByCurrentSrc.id);
+  }
+
+  if (!hasExistingPortraitSelection && matchedPortraitByCurrentSrc?.id) {
+    await tokenDocument.setFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID, matchedPortraitByCurrentSrc.id);
+  }
 
   const initialTokenImage = data.global.tokenRandom
-    ? pickRandomImage(data.tokenImages)
-    : data.tokenImages.find((image) => image.isDefault) ?? null;
+    ? pickRandomImage(tokenImages)
+    : defaultTokenImage;
 
   const initialPortraitImage = data.global.portraitRandom
-    ? pickRandomImage(data.portraitImages)
-    : data.portraitImages.find((image) => image.isDefault) ?? null;
+    ? pickRandomImage(portraitImages)
+    : defaultPortraitImage;
 
   const shouldApplyInitialToken = data.global.tokenRandom || !hasExistingTokenSelection;
   const shouldApplyInitialPortrait = data.global.portraitRandom || !hasExistingPortraitSelection;
 
   if (shouldApplyInitialToken && initialTokenImage) {
     await applyTokenImageById({ actor, tokenDocument, imageId: initialTokenImage.id });
+  } else if (selectedTokenImage) {
+    // Важно для Dynamic Ring: если у токена уже выбран активный образ,
+    // нужно принудительно применить его параметры (ring/scale),
+    // иначе при первом появлении токена кольцо может не отрисоваться.
+    await applyTokenImageById({ actor, tokenDocument, imageObject: selectedTokenImage });
   }
   if (shouldApplyInitialPortrait && initialPortraitImage && !data.global.linkTokenPortrait) {
     await applyPortraitById({ actor, tokenDocument, imageId: initialPortraitImage.id });
@@ -248,6 +336,7 @@ Hooks.on("renderActorSheet", (sheet, html) => {
 
   const actor = tokenDocument.actor;
   if (!actor) return;
+  if (!actorHasModuleFlags(actor)) return;
 
   const data = getActorModuleData(actor);
   const activePortraitImageId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
