@@ -294,6 +294,26 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
     tokenDocument.object.refresh();
   }
 
+  // Linked token: persist token image selection to actor/prototype so changes are shared.
+  const isLinkedToken = Boolean(tokenDocument.actorLink ?? tokenDocument.isLinked);
+  if (isLinkedToken) {
+    try {
+      await actor.update({
+        "prototypeToken.texture.src": image.src,
+        "prototypeToken.texture.scaleX": image.scaleX ?? 1,
+        "prototypeToken.texture.scaleY": image.scaleY ?? 1,
+        [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id
+      }, { mtaManualUpdate: true });
+    } catch (error) {
+      console.warn("[MTA] Failed to sync linked token image to actor", {
+        actorId: actor?.id,
+        actorName: actor?.name,
+        tokenId: tokenDocument?.id,
+        error
+      });
+    }
+  }
+
   if (linkedPortrait) {
     const currentPortraitId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
     if (linkedPortrait.id !== currentPortraitId) {
