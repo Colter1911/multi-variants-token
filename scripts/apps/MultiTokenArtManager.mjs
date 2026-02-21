@@ -1,4 +1,4 @@
-import { IMAGE_LIMIT, IMAGE_TYPES, MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
+import { IMAGE_LIMIT, IMAGE_TYPES, MODULE_ID, STATUS_CONDITIONS, TOKEN_FLAG_KEYS } from "../constants.mjs";
 import { getActorModuleData, setActorModuleData } from "../utils/flag-utils.mjs";
 import { ensureActorDirectory, uploadFileToActorFolder } from "../utils/file-utils.mjs";
 import { pickRandomImage, sortImagesByOrder } from "../logic/RandomMode.mjs";
@@ -53,6 +53,10 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     this._moduleVersion = game.modules?.get(MODULE_ID)?.version ?? "0.0.0";
     this._renderVersion = this.#computeRenderVersion(this._moduleVersion);
+    this._statusOverlay = {
+      visible: false,
+      text: game.i18n.localize("MTA.UploadInProgress")
+    };
   }
 
   async close(options = {}) {
@@ -68,7 +72,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     this.#refreshVersionSnapshot();
 
     if (!this._directoryEnsured && this.actor) {
-      await ensureActorDirectory(this.actor);
+      await ensureActorDirectory(this.actor, { notifyOnError: false });
       this._directoryEnsured = true;
     }
 
@@ -95,7 +99,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         src: defaultSrc,
         sort: 0,
         isDefault: true,
-        autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false },
+        autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false, status: "" },
         customScript: "",
         dynamicRing: initialRing
       }];
@@ -110,7 +114,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         src: defaultSrc,
         sort: 0,
         isDefault: true,
-        autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false },
+        autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false, status: "" },
         customScript: "",
         dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#ffffff", backgroundColor: "#000000" }
       }];
@@ -128,9 +132,13 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     // Нормализация: добавляем autoEnable.enabled если не задано (для обратной совместимости)
     const normalizeImage = (image) => {
       if (!image.autoEnable) {
-        image.autoEnable = { enabled: false, wounded: false, woundedPercent: 50, die: false };
+        image.autoEnable = { enabled: false, wounded: false, woundedPercent: 50, die: false, status: "" };
       } else if (image.autoEnable.enabled === undefined) {
         image.autoEnable.enabled = false;
+      }
+
+      if (typeof image.autoEnable.status !== "string") {
+        image.autoEnable.status = "";
       }
       return image;
     };
@@ -178,9 +186,24 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       const list = imageType === IMAGE_TYPES.TOKEN ? tokenImages : portraitImages;
       const image = list[index];
       if (image) {
+        const selectedStatus = String(image.autoEnable?.status ?? "");
+        const statusOptions = [
+          {
+            value: "",
+            label: game.i18n.localize("MTA.StatusNotSelected"),
+            selected: !selectedStatus
+          },
+          ...STATUS_CONDITIONS.map((statusLabel) => ({
+            value: statusLabel,
+            label: statusLabel,
+            selected: statusLabel === selectedStatus
+          }))
+        ];
+
         activeSettingsData = {
           label: `${imageType === IMAGE_TYPES.TOKEN ? "Token" : "Portrait"} #${index + 1}`,
           image,
+          statusOptions,
           imageType,
           index,
           isToken: imageType === IMAGE_TYPES.TOKEN,
@@ -200,7 +223,9 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       tokenCards,
       portraitCards,
       activeSettings: activeSettingsData,
-      debugVersion: this._renderVersion
+      debugVersion: this._renderVersion,
+      statusOverlayVisible: this._statusOverlay.visible,
+      statusOverlayText: this._statusOverlay.text
     };
   }
 
@@ -324,10 +349,12 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           const woundedCheckbox = settingsPanel.querySelector("[name='autoEnable.wounded']");
           const woundedPercent = settingsPanel.querySelector("[name='autoEnable.woundedPercent']");
           const dieCheckbox = settingsPanel.querySelector("[name='autoEnable.die']");
+          const statusSelect = settingsPanel.querySelector("[name='autoEnable.status']");
 
           if (woundedCheckbox) woundedCheckbox.disabled = !enabled;
           if (woundedPercent) woundedPercent.disabled = !enabled;
           if (dieCheckbox) dieCheckbox.disabled = !enabled;
+          if (statusSelect) statusSelect.disabled = !enabled;
         });
       }
 
@@ -428,6 +455,19 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     this.element?.querySelectorAll(".mta-section.mta-drop-zone-active").forEach((el) => el.classList.remove("mta-drop-zone-active"));
   }
 
+  async #setStatusOverlay({ visible, text = null } = {}) {
+    const nextVisible = Boolean(visible);
+    const nextText = text ?? this._statusOverlay.text;
+    if (this._statusOverlay.visible === nextVisible && this._statusOverlay.text === nextText) return;
+
+    this._statusOverlay = {
+      visible: nextVisible,
+      text: nextText
+    };
+
+    await this.render();
+  }
+
   #getInternalDragPayload(event) {
     if (this._internalCardDrag?.type === "mta-image-card-drag") return this._internalCardDrag;
 
@@ -507,7 +547,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       this.#ensureSingleDefault(sourceList, sourceDefaultId);
     } else {
       if (targetList.length >= IMAGE_LIMIT) {
-        ui.notifications.warn(`Limit of ${IMAGE_LIMIT} images reached.`);
         return false;
       }
 
@@ -539,38 +578,44 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     if (!this._activePasteZone) return;
     if (event.defaultPrevented) return;
 
-    const items = (event.clipboardData || event.originalEvent.clipboardData).items;
-    let foundImage = false;
+    const items = Array.from((event.clipboardData || event.originalEvent?.clipboardData)?.items ?? []);
+    const imageItems = items.filter((item) => item.type?.startsWith("image/"));
 
-    for (const item of items) {
-      if (item.type.indexOf("image") === 0) {
-        foundImage = true;
-        event.preventDefault();
-        const blob = item.getAsFile();
-        const reader = new FileReader();
+    if (imageItems.length > 0) {
+      event.preventDefault();
+      const imageType = this._activePasteZone;
 
-        reader.onload = async (event) => {
-          // We need a proper File object with a name for upload
-          // Generate a timestamped name
-          const ext = blob.type.split("/")[1] || "png";
-          const fileName = `pasted_image_${Date.now()}.${ext}`;
-          const file = new File([blob], fileName, { type: blob.type });
+      const imageFiles = imageItems
+        .map((item, index) => {
+          const blob = item.getAsFile();
+          if (!blob) return null;
+          const rawExt = blob.type?.split("/")[1] ?? "png";
+          const safeExt = rawExt.replace(/[^a-z0-9]/gi, "") || "png";
+          const fileName = `pasted_image_${Date.now()}_${index + 1}.${safeExt}`;
+          return new File([blob], fileName, { type: blob.type || "image/png" });
+        })
+        .filter(Boolean);
 
+      if (!imageFiles.length) return;
+
+      await this.#setStatusOverlay({
+        visible: true,
+        text: game.i18n.localize("MTA.UploadInProgress")
+      });
+      try {
+        for (const file of imageFiles) {
           const path = await uploadFileToActorFolder(file, this.actor);
-          if (path) {
-            await this.#addImage(path, this._activePasteZone);
-          }
-        };
-        reader.readAsArrayBuffer(blob); // Trigger the read
-        // Actually, uploadFileToActorFolder takes a File object directly, no need to read it first unless for preview
-        // but wait, the reader logic above was pure boilerplate. Let's simplify.
+          if (path) await this.#addImage(path, imageType);
+        }
+      } finally {
+        await this.#setStatusOverlay({ visible: false });
       }
+
+      return;
     }
 
-    if (foundImage) return;
-
     // Handle text paste (URLs)?
-    const pastedText = event.clipboardData.getData("text/plain");
+    const pastedText = event.clipboardData?.getData("text/plain");
     if (pastedText && (pastedText.startsWith("http") || pastedText.match(/\.(jpg|jpeg|png|webp|gif|svg)$/i))) {
       event.preventDefault();
       await this.#addImage(pastedText, this._activePasteZone);
@@ -617,11 +662,19 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     }
 
     // 1. Handle OS Files
-    if (event.dataTransfer.files.length > 0) {
-      for (const file of event.dataTransfer.files) {
-        if (!file.type.startsWith("image/")) continue;
-        const path = await uploadFileToActorFolder(file, this.actor);
-        if (path) await this.#addImage(path, imageType);
+    const imageFiles = Array.from(event.dataTransfer?.files ?? []).filter((file) => file.type?.startsWith("image/"));
+    if (imageFiles.length > 0) {
+      await this.#setStatusOverlay({
+        visible: true,
+        text: game.i18n.localize("MTA.UploadInProgress")
+      });
+      try {
+        for (const file of imageFiles) {
+          const path = await uploadFileToActorFolder(file, this.actor);
+          if (path) await this.#addImage(path, imageType);
+        }
+      } finally {
+        await this.#setStatusOverlay({ visible: false });
       }
       return;
     }
@@ -654,13 +707,11 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const activeTokenDocument = this.tokenDocument ?? this.actor?.prototypeToken ?? null;
 
     if (list.length >= IMAGE_LIMIT) {
-      ui.notifications.warn(`Limit of ${IMAGE_LIMIT} images reached.`);
       return;
     }
 
     // Check for duplicates (But allow mystery-man placeholder to be duplicated)
     if (src !== "icons/svg/mystery-man.svg" && list.some(img => img.src === src)) {
-      ui.notifications.warn("This image is already in the list.");
       return;
     }
 
@@ -675,7 +726,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         enabled: false,
         wounded: false,
         woundedPercent: 50,
-        die: false
+        die: false,
+        status: ""
       },
       customScript: "",
       dynamicRing: {
@@ -784,7 +836,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       enabled: panel.querySelector("[name='autoEnable.enabled']")?.checked || false,
       wounded: panel.querySelector("[name='autoEnable.wounded']")?.checked || false,
       woundedPercent: Number(panel.querySelector("[name='autoEnable.woundedPercent']")?.value || 50),
-      die: panel.querySelector("[name='autoEnable.die']")?.checked || false
+      die: panel.querySelector("[name='autoEnable.die']")?.checked || false,
+      status: String(panel.querySelector("[name='autoEnable.status']")?.value ?? "")
     };
 
     console.log("[MTA] Saving autoEnable:", autoEnable);
@@ -814,7 +867,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     }
 
     await setActorModuleData(this.actor, data);
-    ui.notifications.info("Settings saved.");
 
     // Auto-update if this image is currently active
     if (imageType === IMAGE_TYPES.TOKEN) {
@@ -946,7 +998,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const src = String(srcInput?.value ?? image.src ?? "").trim();
 
     if (!src || src === "icons/svg/mystery-man.svg") {
-      ui.notifications.warn(game.i18n.localize("MTA.SourceImageRequired"));
       return null;
     }
 
@@ -971,14 +1022,12 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
   async #persistGeneratedTokenBlob({ blob, src, imageType, index, generationMode = "auto" }) {
     if (!blob) {
-      ui.notifications.error(game.i18n.localize("MTA.TokenCreateFailed"));
       return null;
     }
 
     const file = this.#buildGeneratedTokenFile(blob, src, { generationMode });
-    const uploadedPath = await uploadFileToActorFolder(file, this.actor);
+    const uploadedPath = await uploadFileToActorFolder(file, this.actor, { notifyOnError: false });
     if (!uploadedPath) {
-      ui.notifications.error(game.i18n.localize("MTA.TokenUploadFailed"));
       return null;
     }
 
@@ -988,7 +1037,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     if (imageType === IMAGE_TYPES.PORTRAIT) {
       const tokenList = sortImagesByOrder(data.tokenImages ?? []);
       if (tokenList.length >= IMAGE_LIMIT) {
-        ui.notifications.warn(`Limit of ${IMAGE_LIMIT} images reached.`);
         return null;
       }
 
@@ -1009,7 +1057,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       const tokenList = data.tokenImages ?? [];
       const tokenImage = tokenList[index];
       if (!tokenImage) {
-        ui.notifications.warn(game.i18n.localize("MTA.TokenTargetNotFound"));
         return null;
       }
       tokenImage.src = uploadedPath;
@@ -1044,6 +1091,11 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const { src, imageType, index } = sourceContext;
 
     try {
+      await this.#setStatusOverlay({
+        visible: true,
+        text: game.i18n.localize("MTA.TokenCreateInProgress")
+      });
+
       const service = AutoTokenService.instance();
       const { blob, faceCoordinates } = await service.createTokenBlob(src, 2.5);
       const saved = await this.#persistGeneratedTokenBlob({
@@ -1063,7 +1115,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       this.render();
     } catch (err) {
       console.error("[MTA AutoToken] Ошибка:", err);
-      ui.notifications.error(`${game.i18n.localize("MTA.TokenCreateErrorPrefix")}: ${err.message}`);
+    } finally {
+      await this.#setStatusOverlay({ visible: false });
     }
   }
 
@@ -1078,7 +1131,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       await this.#openManualTokenDialog({ src, imageType, index, image });
     } catch (err) {
       console.error("[MTA ManualToken] Ошибка открытия окна:", err);
-      ui.notifications.error(`${game.i18n.localize("MTA.TokenCreateErrorPrefix")}: ${err.message}`);
     }
   }
 
@@ -1090,8 +1142,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const viewportHeight = Math.max(360, window.innerHeight || 720);
 
     // Фиксированный размер окна (адаптивно только при маленьком экране).
-    const DEFAULT_DIALOG_WIDTH = 1100;
-    const DEFAULT_DIALOG_HEIGHT = 720;
+    const DEFAULT_DIALOG_WIDTH = 1120;
+    const DEFAULT_DIALOG_HEIGHT = 740;
     const width = Math.max(640, Math.min(DEFAULT_DIALOG_WIDTH, viewportWidth - 20));
     const height = Math.max(430, Math.min(DEFAULT_DIALOG_HEIGHT, viewportHeight - 20));
 
@@ -2398,7 +2450,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     const onAlphaToggle = () => {
       if (!state.isFixed) {
-        ui.notifications.warn(game.i18n.localize("MTA.ManualAlphaNeedLock"));
         refreshAlphaControls();
         return;
       }
@@ -2415,7 +2466,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     const onAlphaApply = () => {
       if (!state.isFixed) {
-        ui.notifications.warn(game.i18n.localize("MTA.ManualAlphaNeedLock"));
         refreshAlphaControls();
         return;
       }
@@ -2499,18 +2549,21 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     const onCreate = async () => {
       if (!state.selection) {
-        ui.notifications.warn(game.i18n.localize("MTA.ManualTokenSelectArea"));
         return;
       }
 
       if (state.alphaCurrentStroke || state.alphaPendingPolygons.length > 0) {
-        ui.notifications.warn(game.i18n.localize("MTA.ManualAlphaPendingNotApplied"));
         return;
       }
 
       createBtn.disabled = true;
       cancelBtn.disabled = true;
       try {
+        await this.#setStatusOverlay({
+          visible: true,
+          text: game.i18n.localize("MTA.TokenCreateInProgress")
+        });
+
         const service = AutoTokenService.instance();
         const { blob } = await service.createTokenBlobFromSelection({
           imageSource: state.image,
@@ -2529,13 +2582,13 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         });
 
         if (!saved) return;
-        ui.notifications.info(game.i18n.localize("MTA.ManualTokenCreated"));
         dialog.close();
         this.render();
       } catch (err) {
         console.error("[MTA ManualToken] Ошибка создания:", err);
-        ui.notifications.error(`${game.i18n.localize("MTA.TokenCreateErrorPrefix")}: ${err.message}`);
       } finally {
+        await this.#setStatusOverlay({ visible: false });
+
         if (this._manualTokenDialog === dialog) {
           createBtn.disabled = false;
           cancelBtn.disabled = false;
@@ -2975,7 +3028,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     if (!blob) return null;
 
     const file = this.#buildGeneratedTokenFile(blob, src, { generationMode: "auto" });
-    return uploadFileToActorFolder(file, this.actor);
+    return uploadFileToActorFolder(file, this.actor, { notifyOnError: false });
   }
 
   #buildGeneratedTokenImage(uploadedPath, sort = 0) {
@@ -2990,7 +3043,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         enabled: false,
         wounded: false,
         woundedPercent: 50,
-        die: false
+        die: false,
+        status: ""
       },
       customScript: "",
       dynamicRing: {
@@ -3007,12 +3061,75 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const data = getActorModuleData(this.actor);
     const service = AutoTokenService.instance();
 
-    if (imageType === IMAGE_TYPES.PORTRAIT) {
-      const portraitList = sortImagesByOrder(data.portraitImages ?? []);
-      const tokenList = sortImagesByOrder(data.tokenImages ?? []);
+    await this.#setStatusOverlay({
+      visible: true,
+      text: game.i18n.localize("MTA.TokenBatchCreateInProgress")
+    });
 
-      if (!portraitList.length) {
-        ui.notifications.warn("Нет Portrait-изображений для пакетной обработки.");
+    try {
+      if (imageType === IMAGE_TYPES.PORTRAIT) {
+        const portraitList = sortImagesByOrder(data.portraitImages ?? []);
+        const tokenList = sortImagesByOrder(data.tokenImages ?? []);
+
+        if (!portraitList.length) {
+          return;
+        }
+
+        let created = 0;
+        let skipped = 0;
+        let errors = 0;
+
+        for (let portraitIndex = 0; portraitIndex < portraitList.length; portraitIndex += 1) {
+          const portraitImage = portraitList[portraitIndex];
+          const src = portraitImage?.src;
+
+          if (!src || src === "icons/svg/mystery-man.svg") {
+            skipped += 1;
+            continue;
+          }
+
+          if (tokenList.length >= IMAGE_LIMIT) {
+            skipped += portraitList.length - portraitIndex;
+            break;
+          }
+
+          try {
+            const uploadedPath = await this.#createAutoTokenPathFromSource(src, service);
+            if (!uploadedPath) {
+              errors += 1;
+              continue;
+            }
+
+            const insertIndex = Math.min(Math.max(0, portraitIndex), tokenList.length);
+            const tokenImage = this.#buildGeneratedTokenImage(uploadedPath, insertIndex);
+
+            tokenList.splice(insertIndex, 0, tokenImage);
+            created += 1;
+          } catch (err) {
+            console.error("[MTA AutoToken] Batch create from portrait error:", { src, err });
+            errors += 1;
+          }
+        }
+
+        tokenList.forEach((image, index) => {
+          image.sort = index;
+        });
+
+        if (tokenList.length > 0 && !tokenList.some((image) => image?.isDefault)) {
+          tokenList[0].isDefault = true;
+        }
+
+        data.tokenImages = tokenList;
+        await setActorModuleData(this.actor, data);
+
+        ui.notifications.info(`✅ Пакетная генерация из портретов завершена. Создано: ${created}, Пропущено: ${skipped}, Ошибок: ${errors}.`);
+        this.render();
+        return;
+      }
+
+      const list = data.tokenImages ?? [];
+
+      if (!list.length) {
         return;
       }
 
@@ -3020,18 +3137,19 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       let skipped = 0;
       let errors = 0;
 
-      for (let portraitIndex = 0; portraitIndex < portraitList.length; portraitIndex += 1) {
-        const portraitImage = portraitList[portraitIndex];
-        const src = portraitImage?.src;
+      for (const image of list) {
+        const src = image?.src;
 
+        // Skip placeholders
         if (!src || src === "icons/svg/mystery-man.svg") {
           skipped += 1;
           continue;
         }
 
-        if (tokenList.length >= IMAGE_LIMIT) {
-          skipped += portraitList.length - portraitIndex;
-          break;
+        // Skip already generated auto-tokens
+        if (typeof src === "string" && src.toLowerCase().endsWith("_token.webp")) {
+          skipped += 1;
+          continue;
         }
 
         try {
@@ -3041,84 +3159,27 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
             continue;
           }
 
-          const insertIndex = Math.min(Math.max(0, portraitIndex), tokenList.length);
-          const tokenImage = this.#buildGeneratedTokenImage(uploadedPath, insertIndex);
+          image.src = uploadedPath;
+          image.dynamicRing = {
+            enabled: true,
+            scaleCorrection: 1,
+            ringColor: "#ffffff",
+            backgroundColor: "#000000"
+          };
 
-          tokenList.splice(insertIndex, 0, tokenImage);
           created += 1;
         } catch (err) {
-          console.error("[MTA AutoToken] Batch create from portrait error:", { src, err });
+          console.error("[MTA AutoToken] Batch create error:", { src, err });
           errors += 1;
         }
       }
 
-      tokenList.forEach((image, index) => {
-        image.sort = index;
-      });
-
-      if (tokenList.length > 0 && !tokenList.some((image) => image?.isDefault)) {
-        tokenList[0].isDefault = true;
-      }
-
-      data.tokenImages = tokenList;
       await setActorModuleData(this.actor, data);
 
-      ui.notifications.info(`✅ Пакетная генерация из портретов завершена. Создано: ${created}, Пропущено: ${skipped}, Ошибок: ${errors}.`);
+      ui.notifications.info(`✅ Пакетная генерация завершена. Создано: ${created}, Пропущено: ${skipped}, Ошибок: ${errors}.`);
       this.render();
-      return;
+    } finally {
+      await this.#setStatusOverlay({ visible: false });
     }
-
-    const list = data.tokenImages ?? [];
-
-    if (!list.length) {
-      ui.notifications.warn("Нет Token-изображений для пакетной обработки.");
-      return;
-    }
-
-    let created = 0;
-    let skipped = 0;
-    let errors = 0;
-
-    for (const image of list) {
-      const src = image?.src;
-
-      // Skip placeholders
-      if (!src || src === "icons/svg/mystery-man.svg") {
-        skipped += 1;
-        continue;
-      }
-
-      // Skip already generated auto-tokens
-      if (typeof src === "string" && src.toLowerCase().endsWith("_token.webp")) {
-        skipped += 1;
-        continue;
-      }
-
-      try {
-        const uploadedPath = await this.#createAutoTokenPathFromSource(src, service);
-        if (!uploadedPath) {
-          errors += 1;
-          continue;
-        }
-
-        image.src = uploadedPath;
-        image.dynamicRing = {
-          enabled: true,
-          scaleCorrection: 1,
-          ringColor: "#ffffff",
-          backgroundColor: "#000000"
-        };
-
-        created += 1;
-      } catch (err) {
-        console.error("[MTA AutoToken] Batch create error:", { src, err });
-        errors += 1;
-      }
-    }
-
-    await setActorModuleData(this.actor, data);
-
-    ui.notifications.info(`✅ Пакетная генерация завершена. Создано: ${created}, Пропущено: ${skipped}, Ошибок: ${errors}.`);
-    this.render();
   }
 }

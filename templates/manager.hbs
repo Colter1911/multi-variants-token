@@ -1,4 +1,13 @@
 <section class="mta-layout">
+  <div class="mta-status-overlay{{#if statusOverlayVisible}} is-visible{{/if}}" role="status" aria-live="polite"
+    aria-atomic="true">
+    <div class="mta-status-backdrop"></div>
+    <div class="mta-status-panel">
+      <span class="mta-status-spinner" aria-hidden="true"></span>
+      <span class="mta-status-text">{{statusOverlayText}}</span>
+    </div>
+  </div>
+
   <header class="mta-header">
     <h2>{{title}}</h2>
     <span class="mta-debug-version" style="font-size: 0.8em; color: var(--mta-cyan);">{{debugVersion}}</span>

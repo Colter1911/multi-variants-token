@@ -53,6 +53,72 @@
   height: 100%;
   padding: 12px;
   gap: 12px;
+  position: relative;
+}
+
+.multi-tokenart .mta-status-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.multi-tokenart .mta-status-overlay.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.multi-tokenart .mta-status-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 8, 12, 0.58);
+}
+
+.multi-tokenart .mta-status-panel {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 320px;
+  max-width: min(90%, 640px);
+  padding: 18px 22px;
+  border: 1px solid rgba(34, 211, 238, 0.55);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(18, 25, 33, 0.96), rgba(10, 15, 21, 0.96));
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.28), 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.multi-tokenart .mta-status-spinner {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 3px solid rgba(215, 246, 255, 0.25);
+  border-top-color: var(--mta-cyan);
+  animation: mta-status-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+.multi-tokenart .mta-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  color: #def9ff;
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+@keyframes mta-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .multi-tokenart .mta-header {
@@ -792,7 +858,7 @@
 
 .mta-manual-token-window {
   min-width: 640px;
-  min-height: 420px;
+  min-height: 440px;
 }
 
 .mta-manual-token-window .window-content {
@@ -1002,12 +1068,10 @@
   margin: 0;
   color: var(--mta-text-muted);
   font-size: 11px;
-  line-height: 1.15;
+  line-height: 1.2;
   flex: 0 0 auto;
-  max-height: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 980px) {

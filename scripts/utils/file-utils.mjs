@@ -131,7 +131,7 @@ export function registerFileSocketHandlers() {
   socketHandlersRegistered = true;
 }
 
-export async function ensureActorDirectory(actor) {
+export async function ensureActorDirectory(actor, { notifyOnError = true } = {}) {
   const target = buildActorDirectoryTarget(actor);
 
   try {
@@ -139,14 +139,14 @@ export async function ensureActorDirectory(actor) {
     return target;
   } catch (localError) {
     if (game.user?.isGM) {
-      notifyDirectoryError(localError);
+      if (notifyOnError) notifyDirectoryError(localError);
       return target;
     }
 
     if (!socketHandlersRegistered) registerFileSocketHandlers();
 
     if (!game.users?.activeGM) {
-      notifyDirectoryError(new Error(game.i18n.localize("MTA.DirectoryCreateNoActiveGM")));
+      if (notifyOnError) notifyDirectoryError(new Error(game.i18n.localize("MTA.DirectoryCreateNoActiveGM")));
       return target;
     }
 
@@ -154,19 +154,28 @@ export async function ensureActorDirectory(actor) {
       await requestEnsureDirectoryFromGm(target);
       return target;
     } catch (remoteError) {
-      notifyDirectoryError(remoteError);
+      if (notifyOnError) notifyDirectoryError(remoteError);
       return target;
     }
   }
 }
 
-export async function uploadFileToActorFolder(file, actor) {
-  const folder = await ensureActorDirectory(actor);
+export async function uploadFileToActorFolder(file, actor, { notifyOnError = false } = {}) {
+  const folder = await ensureActorDirectory(actor, { notifyOnError });
   try {
-    const result = await FilePicker.upload("data", folder, file);
+    // Disable Foundry's built-in success toast ("... saved to ...") for add/create flows.
+    // Pass notify=false in both optional argument slots to stay compatible across core API variants.
+    const result = await FilePicker.upload("data", folder, file, { notify: false }, { notify: false });
     return result.path;
   } catch (error) {
-    ui.notifications.error(`Upload failed: ${error.message}`);
+    const message = `Upload failed: ${error.message}`;
+    console.error("[MTA] Upload failed", {
+      actorId: actor?.id,
+      actorName: actor?.name,
+      fileName: file?.name,
+      error
+    });
+    if (notifyOnError) ui.notifications.error(message);
     return null;
   }
 }

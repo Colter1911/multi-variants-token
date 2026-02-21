@@ -98,6 +98,24 @@ function setModuleApi() {
   };
 }
 
+function runAutoActivationForActorTokens(actor) {
+  if (!actor) return;
+
+  for (const token of actor.getActiveTokens(true)) {
+    const tokenDocument = token.document;
+    console.log("[MTA] Processing token", { tokenName: token.name, hasDocument: !!tokenDocument });
+    if (tokenDocument) {
+      void runAutoActivation({ actor, tokenDocument });
+    }
+  }
+}
+
+function resolveActorFromActiveEffect(effect) {
+  const parent = effect?.parent;
+  if (parent?.documentName === "Actor") return parent;
+  return null;
+}
+
 Hooks.once("init", async () => {
   registerSettings();
   registerTokenHudButton();
@@ -142,13 +160,7 @@ Hooks.on("updateActor", (actor, changes, options) => {
 
   console.log("[MTA] HP changed detected, running auto-activation");
   // ВАЖНО: getActiveTokens(true) возвращает Token objects, нужны TokenDocuments
-  for (const token of actor.getActiveTokens(true)) {
-    const tokenDocument = token.document;
-    console.log("[MTA] Processing token", { tokenName: token.name, hasDocument: !!tokenDocument });
-    if (tokenDocument) {
-      void runAutoActivation({ actor, tokenDocument });
-    }
-  }
+  runAutoActivationForActorTokens(actor);
 });
 
 Hooks.on("updateToken", (tokenDocument, changes, options) => {
@@ -165,6 +177,32 @@ Hooks.on("updateToken", (tokenDocument, changes, options) => {
   if (!actor) return;
 
   void runAutoActivation({ actor, tokenDocument });
+});
+
+Hooks.on("createActiveEffect", (effect, _options) => {
+  const actor = resolveActorFromActiveEffect(effect);
+  if (!actor) return;
+
+  console.log("[MTA] createActiveEffect detected, running auto-activation", { actorName: actor.name, effectName: effect.name });
+  runAutoActivationForActorTokens(actor);
+});
+
+Hooks.on("updateActiveEffect", (effect, _changes, options) => {
+  if (options?.mtaManualUpdate) return;
+
+  const actor = resolveActorFromActiveEffect(effect);
+  if (!actor) return;
+
+  console.log("[MTA] updateActiveEffect detected, running auto-activation", { actorName: actor.name, effectName: effect.name });
+  runAutoActivationForActorTokens(actor);
+});
+
+Hooks.on("deleteActiveEffect", (effect, _options) => {
+  const actor = resolveActorFromActiveEffect(effect);
+  if (!actor) return;
+
+  console.log("[MTA] deleteActiveEffect detected, running auto-activation", { actorName: actor.name, effectName: effect.name });
+  runAutoActivationForActorTokens(actor);
 });
 
 Hooks.on("createToken", async (tokenDocument) => {
@@ -191,10 +229,13 @@ Hooks.on("createToken", async (tokenDocument) => {
     ? pickRandomImage(data.portraitImages)
     : data.portraitImages.find((image) => image.isDefault) ?? null;
 
-  if (!hasExistingTokenSelection && initialTokenImage) {
+  const shouldApplyInitialToken = data.global.tokenRandom || !hasExistingTokenSelection;
+  const shouldApplyInitialPortrait = data.global.portraitRandom || !hasExistingPortraitSelection;
+
+  if (shouldApplyInitialToken && initialTokenImage) {
     await applyTokenImageById({ actor, tokenDocument, imageId: initialTokenImage.id });
   }
-  if (!hasExistingPortraitSelection && initialPortraitImage && !data.global.linkTokenPortrait) {
+  if (shouldApplyInitialPortrait && initialPortraitImage && !data.global.linkTokenPortrait) {
     await applyPortraitById({ actor, tokenDocument, imageId: initialPortraitImage.id });
   }
 

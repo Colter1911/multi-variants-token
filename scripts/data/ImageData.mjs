@@ -16,7 +16,8 @@ export class ImageData extends foundry.abstract.DataModel {
         enabled: new fields.BooleanField({ required: true, initial: false }),
         wounded: new fields.BooleanField({ required: true, initial: false }),
         woundedPercent: new fields.NumberField({ required: true, integer: true, min: 1, max: 99, initial: 50 }),
-        die: new fields.BooleanField({ required: true, initial: false })
+        die: new fields.BooleanField({ required: true, initial: false }),
+        status: new fields.StringField({ required: true, blank: true, initial: "" })
       }),
       customScript: new fields.StringField({ required: true, blank: true, initial: "" }),
       dynamicRing: new fields.SchemaField({

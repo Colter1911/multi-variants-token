@@ -46,6 +46,17 @@
       <input type="checkbox" name="autoEnable.die" {{checked image.autoEnable.die}} {{#unless
         image.autoEnable.enabled}}disabled{{/unless}} />
     </label>
+
+    <label>
+      <span class="label-text">{{localize "MTA.StatusCondition"}}</span>
+      <select name="autoEnable.status" {{#unless image.autoEnable.enabled}}disabled{{/unless}}>
+        {{#each statusOptions}}
+        <option value="{{value}}" {{#if selected}}selected{{/if}}>
+          {{label}}
+        </option>
+        {{/each}}
+      </select>
+    </label>
     <hr class="mta-dashed-separator">
 
     {{#if isToken}}

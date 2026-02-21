@@ -92,17 +92,89 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
   const hpValue = hp.current;
   const hpPercent = hp.percent;
 
+  const getTokenStatuses = (tokenDoc) => {
+    if (!tokenDoc) return [];
+
+    const statuses = new Set();
+    const pushStatus = (value) => {
+      if (value === null || value === undefined) return;
+      const label = String(value).trim();
+      if (label) statuses.add(label);
+    };
+
+    const processEffect = (effect) => {
+      if (!effect) return;
+
+      pushStatus(effect?.name);
+      pushStatus(effect?.label);
+      pushStatus(effect?.statusId);
+      pushStatus(effect?.slug);
+
+      const statusesField = effect?.statuses;
+      if (statusesField instanceof Set) {
+        for (const entry of statusesField) pushStatus(entry);
+      } else if (Array.isArray(statusesField)) {
+        for (const entry of statusesField) pushStatus(entry);
+      }
+
+      const nestedStatus = effect?.statuses?.status;
+      if (Array.isArray(nestedStatus)) {
+        for (const entry of nestedStatus) pushStatus(entry);
+      }
+
+      const id = effect?._id ?? effect?.id;
+      if (id && typeof tokenDoc.hasStatusEffect === "function") {
+        try {
+          if (tokenDoc.hasStatusEffect(id)) pushStatus(effect?.name ?? effect?.label ?? id);
+        } catch (_err) {
+          // ignore hasStatusEffect failures for malformed ids
+        }
+      }
+    };
+
+    const actorEffects = tokenDoc?.actor?.effects;
+    if (actorEffects) {
+      for (const effect of actorEffects) {
+        if (effect?.disabled) continue;
+        processEffect(effect);
+      }
+    }
+
+    const tokenEffects = tokenDoc?.effects;
+    if (Array.isArray(tokenEffects)) {
+      for (const entry of tokenEffects) pushStatus(entry);
+    }
+
+    return Array.from(statuses);
+  };
+
+  const tokenStatuses = getTokenStatuses(tokenDocument);
+  const hasStatusMatch = (image) => {
+    if (!image?.autoEnable?.enabled) return false;
+
+    const wantedStatus = String(image.autoEnable?.status ?? "").trim();
+    if (!wantedStatus) return false;
+
+    return tokenStatuses.some((statusValue) => statusValue.localeCompare(wantedStatus, undefined, { sensitivity: "accent" }) === 0);
+  };
+
   // Logic: Find the highest priority matching image
   // 1. DEAD (HP <= 0)
   const die = imageList.filter(i => i.autoEnable?.enabled && i.autoEnable?.die && hpValue <= 0);
 
-  // 2. WOUNDED (HP <= threshold)
+  // 2. STATUS (selected status is present on token)
+  const statusMatched = imageList.filter((i) => hasStatusMatch(i));
+
+  // 3. WOUNDED (HP <= threshold)
   // FIX: Removed 'hpValue > 0' check. 
   // This allows Wounded images to be selected even at 0 HP if no explicit Die image exists.
   const wounded = imageList.filter(i => i.autoEnable?.enabled && i.autoEnable?.wounded && hpPercent <= (i.autoEnable.woundedPercent || 50));
 
   if (die.length) {
     return die[0];
+  }
+  if (statusMatched.length) {
+    return statusMatched[0];
   }
   if (wounded.length) {
     // If we are dead (0 HP) but have no Die image, we fall through here.
@@ -115,8 +187,10 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
   const activeImg = imageList.find(i => i.id === activeId);
 
   if (activeImg) {
-    // Is the current image "Special" (Wounded/Die)?
-    const isSpecialInfo = activeImg.autoEnable?.enabled && (activeImg.autoEnable?.die || activeImg.autoEnable?.wounded);
+    // Is the current image "Special" (Die/Status/Wounded)?
+    const hasConfiguredStatus = Boolean(String(activeImg.autoEnable?.status ?? "").trim());
+    const isSpecialInfo = activeImg.autoEnable?.enabled
+      && (activeImg.autoEnable?.die || activeImg.autoEnable?.wounded || hasConfiguredStatus);
 
     // If it's NOT special, and valid, we keep it (Manual override persistence)
     if (!isSpecialInfo) {
