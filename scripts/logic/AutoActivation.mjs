@@ -75,8 +75,8 @@ export async function runAutoActivation({ actor, tokenDocument }) {
   }
 
   // Auto Rotate
+  const hp = resolveHpData(actor);
   if (data.global.autoRotate) {
-    const hp = resolveHpData(actor);
     await applyAutoRotate({ tokenDocument, shouldRotate: hp.current <= 0 });
   }
 }
@@ -369,7 +369,10 @@ export async function applyPortraitById({ actor, tokenDocument, imageId, imageOb
     actorUpdates[`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID}`] = image.id;
   }
 
-  await actor.update(actorUpdates);
+  // Idempotency: пропускаем обновление актора если портрет уже совпадает
+  if (actor.img !== image.src) {
+    await actor.update(actorUpdates);
+  }
 
   // Apply flag updates to Token (to remember state)
   if (tokenDocument && !foundry.utils.isEmpty(updates)) {

@@ -4,7 +4,7 @@ import { ModuleData } from "../data/ModuleData.mjs";
 const DEFAULT_MODULE_DATA = {
   version: 1,
   global: {
-    autoRotate: true,
+    autoRotate: false,
     tokenRandom: false,
     portraitRandom: false,
     linkTokenPortrait: false

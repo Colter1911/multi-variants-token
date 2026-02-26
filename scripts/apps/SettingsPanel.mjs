@@ -20,7 +20,7 @@ export class SettingsPanel extends HandlebarsApplicationMixin(ApplicationV2) {
       height: "auto"
     },
     form: {
-      handler: SettingsPanel.prototype._updateObject,
+      handler: SettingsPanel.#onSubmit,
       submitOnChange: false,
       closeOnSubmit: true
     }
@@ -65,20 +65,18 @@ export class SettingsPanel extends HandlebarsApplicationMixin(ApplicationV2) {
       ?.addEventListener("click", (event) => this.#onBrowse(event));
   }
 
-  async _updateObject(event, formData) {
+  // V13 ApplicationV2 form handler signature: (event, form, formData)
+  static async #onSubmit(event, form, formData) {
     const data = getActorModuleData(this.actor);
     const list = this.imageType === IMAGE_TYPES.TOKEN ? data.tokenImages : data.portraitImages;
 
-    // Use expandObject to handle dot notation (e.g. autoEnable.wounded)
     const activeImage = list[this.index];
     if (!activeImage) return;
 
-    const expanded = foundry.utils.expandObject(formData);
-
-    // Merge updates into the specific image object
+    // FormDataExtended.object уже есть плоский объект полей формы
+    const expanded = foundry.utils.expandObject(formData.object);
     foundry.utils.mergeObject(activeImage, expanded);
 
-    // If this is set to default, unset others
     if (activeImage.isDefault) {
       list.forEach((img, i) => {
         if (i !== this.index) img.isDefault = false;
@@ -87,16 +85,16 @@ export class SettingsPanel extends HandlebarsApplicationMixin(ApplicationV2) {
 
     await setActorModuleData(this.actor, data);
 
-    // Refresh manager if open
     const manager = Object.values(ui.windows).find((w) => w.id === `${MODULE_ID}-manager`);
     manager?.render(true);
   }
 
   async #onDelete() {
-    const confirmed = await Dialog.confirm({
-      title: "Delete Image?",
-      content: "<p>Are you sure you want to delete this image setting?</p>",
-      defaultYes: false
+    const confirmed = await foundry.applications.api.DialogV2.confirm({
+      window: { title: game.i18n.localize("MTA.DeleteImageTitle") },
+      content: `<p>${game.i18n.localize("MTA.DeleteImageContent")}</p>`,
+      rejectClose: false,
+      modal: true
     });
 
     if (!confirmed) return;
@@ -115,13 +113,11 @@ export class SettingsPanel extends HandlebarsApplicationMixin(ApplicationV2) {
 
   #onBrowse(event) {
     const input = event.currentTarget.previousElementSibling;
-    const fp = new FilePicker({
+    const picker = new FilePicker({
       type: "image",
       current: input.value,
-      callback: path => {
-        input.value = path;
-      }
+      callback: (path) => { input.value = path; }
     });
-    fp.browse();
+    picker.browse(input.value);
   }
 }

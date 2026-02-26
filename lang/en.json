@@ -61,5 +61,8 @@
   "MTA.TokenBatchCreateInProgress": "Batch token creation...",
   "MTA.DirectoryCreateError": "Failed to create Multi Token Art folder: {error}",
   "MTA.DirectoryCreateTimeout": "Failed to create folder: timed out waiting for GM response.",
-  "MTA.DirectoryCreateNoActiveGM": "Failed to create folder: no active GM is online."
+  "MTA.DirectoryCreateNoActiveGM": "Failed to create folder: no active GM is online.",
+  "MTA.DeleteImageTitle": "Delete Image",
+  "MTA.DeleteImageContent": "Are you sure you want to delete this image?",
+  "MTA.BatchCreateComplete": "Batch token generation complete. Created: {created}, Skipped: {skipped}, Errors: {errors}."
 }

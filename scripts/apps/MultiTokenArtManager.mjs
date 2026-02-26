@@ -90,8 +90,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       const initialRing = {
         enabled: ringData.enabled ?? false,
         scaleCorrection: 1, // Default to 1 as requested previously
-        ringColor: ringData.colors?.ring ? PIXI.utils.hex2string(ringData.colors.ring) : "#ffffff",
-        backgroundColor: ringData.colors?.background ? PIXI.utils.hex2string(ringData.colors.background) : "#000000"
+        ringColor: ringData.colors?.ring ? Color.from(ringData.colors.ring).toString() : "#ffffff",
+        backgroundColor: ringData.colors?.background ? Color.from(ringData.colors.background).toString() : "#000000"
       };
 
       data.tokenImages = [{
@@ -644,18 +644,10 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       this._internalCardDrag = null;
       this.#clearDragVisualState();
 
-      // Defensive cleanup: some browsers/Foundry interactions can leave stale hover UI
-      // after external token drag/drop or clone operations.
-      const hoveredLayer = canvas?.tokens?.hover;
-      if (hoveredLayer) {
-        hoveredLayer.hover = false;
-        hoveredLayer.renderFlags?.set?.({ refreshHover: true, refreshState: true });
-      }
-
+      // Defensive cleanup: refresh controlled token state after drop
       const controlledTokens = canvas?.tokens?.controlled ?? [];
       for (const token of controlledTokens) {
-        token.hover = false;
-        token.renderFlags?.set?.({ refreshHover: true, refreshState: true });
+        token.renderFlags?.set?.({ refreshState: true });
       }
 
       return;
@@ -799,13 +791,14 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const imageType = card.dataset.imageType;
     const index = Number(card.dataset.index ?? 0);
 
-    const confirm = await Dialog.confirm({
-      title: "Delete Image?",
-      content: "<p>Are you sure you want to delete this image configuration?</p>",
-      defaultYes: false
+    const confirmed = await foundry.applications.api.DialogV2.confirm({
+      window: { title: game.i18n.localize("MTA.DeleteImageTitle") },
+      content: `<p>${game.i18n.localize("MTA.DeleteImageContent")}</p>`,
+      rejectClose: false,
+      modal: true
     });
 
-    if (!confirm) return;
+    if (!confirmed) return;
 
     const data = getActorModuleData(this.actor);
     const list = imageType === IMAGE_TYPES.TOKEN ? data.tokenImages : data.portraitImages;
@@ -955,13 +948,14 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
   async #onDeleteImage(event) {
     if (!this.activeSettings) return;
 
-    const confirm = await Dialog.confirm({
-      title: "Delete Image?",
-      content: "<p>Are you sure you want to delete this image configuration?</p>",
-      defaultYes: false
+    const confirmed = await foundry.applications.api.DialogV2.confirm({
+      window: { title: game.i18n.localize("MTA.DeleteImageTitle") },
+      content: `<p>${game.i18n.localize("MTA.DeleteImageContent")}</p>`,
+      rejectClose: false,
+      modal: true
     });
 
-    if (!confirm) return;
+    if (!confirmed) return;
 
     const { index, imageType } = this.activeSettings;
     const data = getActorModuleData(this.actor);
@@ -1023,8 +1017,22 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       await runAutoActivation({ actor: this.actor, tokenDocument: this.tokenDocument });
     }
 
+    // При изменении autoRotate — немедленно применить/сбросить поворот на текущем токене.
+    // Иначе если токен уже был повёрнут (270°), он остаётся повёрнутым навсегда при выключении.
+    if (name === "autoRotate" && this.tokenDocument) {
+      if (checked) {
+        // Включили — если HP уже 0, сразу повернуть
+        const hp = resolveHpData(this.actor);
+        await applyAutoRotate({ tokenDocument: this.tokenDocument, shouldRotate: hp.current <= 0 });
+      } else {
+        // Выключили — немедленно восстановить исходный поворот
+        await applyAutoRotate({ tokenDocument: this.tokenDocument, shouldRotate: false });
+      }
+    }
+
     this.render();
   }
+
 
   #resolveActiveImageSource() {
     if (!this.activeSettings) return null;
@@ -1123,8 +1131,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
   #forceTokenTextureRefresh() {
     const token = this.tokenDocument?.object;
     if (!token) return;
+    // V13: draw() удалён, используем только renderFlags
     token.renderFlags.set({ refreshMesh: true });
-    token.draw();
   }
 
   async #onCreateToken(event) {
@@ -1283,8 +1291,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
   }
 
   #resolveDialogRoot(html, dialog) {
-    const direct = html?.[0] ?? html;
-    if (direct?.querySelector) return direct;
+    // V13: не используем html?.[0] (jQuery), dialog.element — нативный HTMLElement
+    if (html instanceof HTMLElement && html.querySelector) return html;
     if (dialog?.element?.querySelector) return dialog.element;
     return document.querySelector(`.${MODULE_ID}.mta-manual-token-window`) ?? null;
   }
@@ -3165,7 +3173,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         data.tokenImages = tokenList;
         await setActorModuleData(this.actor, data);
 
-        ui.notifications.info(`✅ Пакетная генерация из портретов завершена. Создано: ${created}, Пропущено: ${skipped}, Ошибок: ${errors}.`);
+        ui.notifications.info(game.i18n.format("MTA.BatchCreateComplete", { created, skipped, errors }));
         this.render();
         return;
       }

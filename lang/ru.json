@@ -61,5 +61,8 @@
     "MTA.TokenBatchCreateInProgress": "Пакетное создание токенов...",
     "MTA.DirectoryCreateError": "Не удалось создать папку Multi Token Art: {error}",
     "MTA.DirectoryCreateTimeout": "Не удалось создать папку: превышено время ожидания ответа GM.",
-    "MTA.DirectoryCreateNoActiveGM": "Не удалось создать папку: в мире нет активного GM."
+    "MTA.DirectoryCreateNoActiveGM": "Не удалось создать папку: в мире нет активного GM.",
+    "MTA.DeleteImageTitle": "Удалить изображение",
+    "MTA.DeleteImageContent": "Вы уверены, что хотите удалить это изображение?",
+    "MTA.BatchCreateComplete": "Пакетная генерация завершена. Создано: {created}, Пропущено: {skipped}, Ошибок: {errors}."
 }

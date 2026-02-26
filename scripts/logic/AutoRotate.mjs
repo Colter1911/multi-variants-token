@@ -44,5 +44,5 @@ export async function applyAutoRotate({ tokenDocument, shouldRotate }) {
 
   if (foundry.utils.isEmpty(updates)) return;
 
-  await tokenDocument.update(updates);
+  await tokenDocument.update(updates, { mtaManualUpdate: true });
 }

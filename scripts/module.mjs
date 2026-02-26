@@ -64,9 +64,7 @@ function pushActorSheetHeaderControl(sheetLike, controls) {
     icon: "fas fa-masks-theater",
     label: localized,
     title: localized,
-    onClick: () => openManagerForActor(actor, tokenDocument),
-    onclick: () => openManagerForActor(actor, tokenDocument),
-    callback: () => openManagerForActor(actor, tokenDocument)
+    onClick: () => openManagerForActor(actor, tokenDocument)
   });
 }
 
@@ -116,7 +114,7 @@ function hasTokenHpLikeChange(changes) {
 
   const { currentPath, maxPath } = getConfiguredHpPaths();
   const hpPaths = [currentPath, maxPath];
-  const prefixes = ["delta", "actorData", "actorData.data"];
+  const prefixes = ["delta"];
 
   for (const hpPath of hpPaths) {
     if (!hpPath) continue;
@@ -130,6 +128,53 @@ function hasTokenHpLikeChange(changes) {
   }
 
   return false;
+}
+
+function canCurrentUserUpdateToken(tokenDocument) {
+  const user = game.user;
+  if (!tokenDocument || !user) return false;
+  if (user.isGM) return true;
+
+  try {
+    if (typeof tokenDocument.canUserModify === "function") {
+      return tokenDocument.canUserModify(user, "update");
+    }
+  } catch (_error) {
+    // noop
+  }
+
+  try {
+    if (typeof tokenDocument.testUserPermission === "function") {
+      const ownerLevel = CONST?.DOCUMENT_OWNERSHIP_LEVELS?.OWNER;
+      if (Number.isFinite(ownerLevel)) {
+        return tokenDocument.testUserPermission(user, ownerLevel);
+      }
+    }
+  } catch (_error) {
+    // noop
+  }
+
+  return Boolean(tokenDocument.isOwner);
+}
+
+function shouldCurrentUserRunTokenAutomation(tokenDocument) {
+  if (!tokenDocument) return false;
+
+  const user = game.user;
+  if (!user) return false;
+
+  // Выполняем автоматизацию только на активном ГМ, чтобы не дублировать апдейты
+  // и не ловить ошибки прав у игроков при broadcast-хуках.
+  if (user.isGM) {
+    const activeGmId = game.users?.activeGM?.id ?? null;
+    return !activeGmId || activeGmId === user.id;
+  }
+
+  // Пока в сессии есть активный ГМ, автоматизация токена выполняется только у него.
+  // Для edge-case без активного ГМ разрешаем выполнить только при реальных правах update.
+  if (game.users?.activeGM) return false;
+
+  return canCurrentUserUpdateToken(tokenDocument);
 }
 
 function setModuleApi() {
@@ -149,16 +194,42 @@ function setModuleApi() {
   };
 }
 
-function runAutoActivationForActorTokens(actor) {
+// Per-actor debounce: коллапсирует несколько быстрых хуков (Пp + статус-эффект) в один вызов
+// Ключ: дебаунс пересоздаётся при каждом вызове чтобы не замыкать устаревшего актора
+const _actorAutoActivationDebounced = new Map();
+const _actorAutoActivationRunning = new Set();
+
+function scheduleAutoActivationForActor(actor) {
   if (!actor || !actorHasModuleFlags(actor)) return;
 
-  for (const token of actor.getActiveTokens(true)) {
-    const tokenDocument = token.document;
-    console.log("[MTA] Processing token", { tokenName: token.name, hasDocument: !!tokenDocument });
-    if (tokenDocument) {
-      void runAutoActivation({ actor, tokenDocument });
+  const actorId = actor.id;
+  if (!actorId) return;
+
+  // ВАЖНО: НЕ используем game.actors.get(actorId)!
+  // Для unlinked-токенов actor = синтетический актор с delta-флагами (autoRotate из токена).
+  // game.actors.get() вернул бы базового актора без delta — с другим autoRotate!
+  // Дебаунс пересоздаётся каждый раз чтобы захватывать актуальный actor-объект.
+  const debouncedFn = foundry.utils.debounce(async () => {
+    if (_actorAutoActivationRunning.has(actorId)) return;
+    _actorAutoActivationRunning.add(actorId);
+    try {
+      if (!actorHasModuleFlags(actor)) return;
+      for (const token of actor.getActiveTokens(true)) {
+        const tokenDocument = token.document;
+        if (tokenDocument && shouldCurrentUserRunTokenAutomation(tokenDocument)) {
+          await runAutoActivation({ actor, tokenDocument });
+        }
+      }
+    } finally {
+      _actorAutoActivationRunning.delete(actorId);
     }
-  }
+  }, 200);
+
+  // Отменяем предыдущий pending-вызов если он есть
+  const existing = _actorAutoActivationDebounced.get(actorId);
+  if (existing) existing.cancel?.();
+  _actorAutoActivationDebounced.set(actorId, debouncedFn);
+  debouncedFn();
 }
 
 function resolveActorFromActiveEffect(effect) {
@@ -194,35 +265,17 @@ Hooks.once("ready", () => {
 });
 
 Hooks.on("updateActor", (actor, changes, options) => {
-  console.log("[MTA] updateActor hook fired", { actorName: actor.name, changes });
-
-  if (options && options.mtaManualUpdate) {
-    console.log("[MTA] Ignoring manual update (mtaManualUpdate=true)");
-    return;
-  }
-
-  if (!actorHasModuleFlags(actor)) {
-    return;
-  }
+  if (options?.mtaManualUpdate) return;
+  if (!actorHasModuleFlags(actor)) return;
 
   const hpChanged = hasActorHpLikeChange(changes);
-  if (!hpChanged) {
-    console.log("[MTA] HP not changed, skipping");
-    return;
-  }
+  if (!hpChanged) return;
 
-  console.log("[MTA] HP changed detected, running auto-activation");
-  // ВАЖНО: getActiveTokens(true) возвращает Token objects, нужны TokenDocuments
-  runAutoActivationForActorTokens(actor);
+  scheduleAutoActivationForActor(actor);
 });
 
 Hooks.on("updateToken", (tokenDocument, changes, options) => {
-  console.log("[MTA] updateToken hook fired", { tokenName: tokenDocument.name, changes });
-
-  if (options && options.mtaManualUpdate) {
-    console.log("[MTA] Ignoring manual update (mtaManualUpdate=true)");
-    return;
-  }
+  if (options?.mtaManualUpdate) return;
 
   const actor = tokenDocument.actor;
   if (!actor) return;
@@ -231,37 +284,34 @@ Hooks.on("updateToken", (tokenDocument, changes, options) => {
   const hpLikeChanged = hasTokenHpLikeChange(changes);
   if (!hpLikeChanged) return;
 
-  void runAutoActivation({ actor, tokenDocument });
+  // Для unlinked-токенов запускаем через дебаунс чтобы избежать совпадения с другими хуками
+  scheduleAutoActivationForActor(actor);
 });
 
 Hooks.on("createActiveEffect", (effect, _options) => {
   const actor = resolveActorFromActiveEffect(effect);
   if (!actor) return;
-
-  console.log("[MTA] createActiveEffect detected, running auto-activation", { actorName: actor.name, effectName: effect.name });
-  runAutoActivationForActorTokens(actor);
+  scheduleAutoActivationForActor(actor);
 });
 
 Hooks.on("updateActiveEffect", (effect, _changes, options) => {
   if (options?.mtaManualUpdate) return;
-
   const actor = resolveActorFromActiveEffect(effect);
   if (!actor) return;
-
-  console.log("[MTA] updateActiveEffect detected, running auto-activation", { actorName: actor.name, effectName: effect.name });
-  runAutoActivationForActorTokens(actor);
+  scheduleAutoActivationForActor(actor);
 });
 
 Hooks.on("deleteActiveEffect", (effect, _options) => {
   const actor = resolveActorFromActiveEffect(effect);
   if (!actor) return;
-
-  console.log("[MTA] deleteActiveEffect detected, running auto-activation", { actorName: actor.name, effectName: effect.name });
-  runAutoActivationForActorTokens(actor);
+  scheduleAutoActivationForActor(actor);
 });
 
 Hooks.on("createToken", async (tokenDocument) => {
   console.log("[MTA] createToken hook fired", { tokenName: tokenDocument.name });
+
+  if (!shouldCurrentUserRunTokenAutomation(tokenDocument)) return;
+
   const actor = tokenDocument.actor;
   if (!actor) return;
   if (!actorHasModuleFlags(actor)) return;
@@ -330,7 +380,7 @@ Hooks.on("createToken", async (tokenDocument) => {
   await runAutoActivation({ actor, tokenDocument });
 });
 
-Hooks.on("renderActorSheet", (sheet, html) => {
+Hooks.on("renderActorSheet", (sheet, htmlLike) => {
   const tokenDocument = sheet.token?.document;
   if (!tokenDocument) return;
 
@@ -343,6 +393,10 @@ Hooks.on("renderActorSheet", (sheet, html) => {
   const activePortrait = data.portraitImages.find((image) => image.id === activePortraitImageId);
   if (!activePortrait?.src) return;
 
-  const portrait = html.querySelector("img.profile, img[data-edit='img']");
+  // V13: normalise htmlLike — ApplicationV2 passes HTMLElement, legacy Application passes jQuery
+  const element = htmlLike instanceof HTMLElement ? htmlLike : (htmlLike?.[0] ?? htmlLike);
+  if (!element?.querySelector) return;
+
+  const portrait = element.querySelector("img.profile, img[data-edit='img']");
   if (portrait) portrait.src = activePortrait.src;
 });
