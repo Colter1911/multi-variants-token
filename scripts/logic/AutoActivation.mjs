@@ -91,6 +91,7 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
   const hp = resolveHpData(actor);
   const hpValue = hp.current;
   const hpPercent = hp.percent;
+  const getWoundedThreshold = (image) => Number(image?.autoEnable?.woundedPercent ?? 50);
 
   const getTokenStatuses = (tokenDoc) => {
     if (!tokenDoc) return [];
@@ -168,7 +169,13 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
   // 3. WOUNDED (HP <= threshold)
   // FIX: Removed 'hpValue > 0' check. 
   // This allows Wounded images to be selected even at 0 HP if no explicit Die image exists.
-  const wounded = imageList.filter(i => i.autoEnable?.enabled && i.autoEnable?.wounded && hpPercent <= (i.autoEnable.woundedPercent || 50));
+  const wounded = imageList
+    .filter((i) => i.autoEnable?.enabled && i.autoEnable?.wounded && hpPercent <= getWoundedThreshold(i))
+    .sort((a, b) => {
+      const thresholdDiff = getWoundedThreshold(a) - getWoundedThreshold(b);
+      if (thresholdDiff !== 0) return thresholdDiff;
+      return Number(a?.sort ?? 0) - Number(b?.sort ?? 0);
+    });
 
   if (die.length) {
     return die[0];
@@ -177,9 +184,8 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
     return statusMatched[0];
   }
   if (wounded.length) {
-    // If we are dead (0 HP) but have no Die image, we fall through here.
-    // 'wounded' will contain images since 0 <= 50.
-    // So we return the wounded image as fallback.
+    // Return the most severe wounded match first.
+    // Example: at 5% HP, the 10% variant should override the 50% variant.
     return wounded[0];
   }
 

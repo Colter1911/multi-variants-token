@@ -256,6 +256,19 @@ Hooks.once("ready", () => {
   // Re-apply API in case another package overwrote it after init.
   setModuleApi();
 
+  // Force Dynamic Ring Scaling to "grid" — required for correct ring rendering.
+  if (game.user.isGM) {
+    try {
+      const current = game.settings.get("core", "dynamicTokenRingScaling");
+      if (current !== "grid") {
+        game.settings.set("core", "dynamicTokenRingScaling", "grid");
+        console.log("[MTA] Dynamic Ring Scaling set to 'grid'");
+      }
+    } catch (_err) {
+      // Setting may not exist in this Foundry version — skip silently.
+    }
+  }
+
   globalThis.MultiTokenArtDebug = {
     openForControlledToken: openManagerForControlledToken,
     openManagerForTokenDocument,

@@ -12,6 +12,8 @@ import { MODULE_ID } from "../constants.mjs";
 
 const MODEL_PATH = `modules/${MODULE_ID}/models`;
 const TOKEN_SIZE = 512;
+const CUSTOM_FRAME_TOKEN_SIZE = 1024;
+const MANUAL_SOURCE_CROP_SCALE = 2;
 const INNER_SCALE = 0.85;
 
 let _instance = null;
@@ -145,7 +147,7 @@ export class AutoTokenService {
         console.log(`[MTA AutoToken] Final Draw Coords: sx=${cropRect.sx}, sy=${cropRect.sy}, size=${cropRect.sw}x${cropRect.sh} from ${imgWidth}x${imgHeight}`);
 
         try {
-            const canvas = this._renderTokenCanvasFromCrop({
+            const { canvas } = this._renderTokenCanvasFromCrop({
                 img,
                 sx: cropRect.sx,
                 sy: cropRect.sy,
@@ -166,17 +168,22 @@ export class AutoTokenService {
 
     /**
      * Создаёт круглый токен из ручной области (центр + размер квадрата в px исходника).
-     * Не требует face detection.
+     * Не требует face detection. Для ручного режима расширяет source-crop,
+     * но сохраняет итоговый размер токена и dynamic ring в масштабе x1.
      *
      * @param {object} params
      * @param {string|HTMLImageElement} params.imageSource
      * @param {number} params.centerX
      * @param {number} params.centerY
      * @param {number} params.cropSize
-     * @param {Array<Array<{x:number, y:number}>>} [params.alphaPolygons] — полигоны в координатах исходника
-     * @returns {Promise<{blob: Blob, cropRect: {sx:number, sy:number, sw:number, sh:number}}>} 
+     * @param {Array<Array<{x:number, y:number}>>} [params.alphaPolygons]
+     * @param {{image:HTMLImageElement, offsetX:number, offsetY:number, scale:number}|null} [params.customFrame]
+     * @param {number} [params.canvasSize]
+     * @param {number} [params.compositionScale=1]
+     * @param {boolean} [params.allowOverflowCanvas=false]
+     * @returns {Promise<{blob: Blob, cropRect: object, renderMetadata: object}>}
      */
-    async createTokenBlobFromSelection({ imageSource, centerX, centerY, cropSize, alphaPolygons = null }) {
+    async createTokenBlobFromSelection({ imageSource, centerX, centerY, cropSize, alphaPolygons = null, customFrame = null, canvasSize = null, compositionScale = 1, allowOverflowCanvas = false }) {
         const img = await this._loadImage(imageSource);
         const imgWidth = img.naturalWidth || img.width;
         const imgHeight = img.naturalHeight || img.height;
@@ -184,36 +191,45 @@ export class AutoTokenService {
         const cropRect = this._createSafeCropRect({
             centerX,
             centerY,
-            cropSize,
+            cropSize: cropSize * MANUAL_SOURCE_CROP_SCALE,
             imgWidth,
             imgHeight
         });
 
-        const canvas = this._renderTokenCanvasFromCrop({
+        const { canvas, metadata } = this._renderTokenCanvasFromCrop({
             img,
             sx: cropRect.sx,
             sy: cropRect.sy,
             sw: cropRect.sw,
             sh: cropRect.sh,
-            alphaPolygons
+            alphaPolygons,
+            customFrame,
+            canvasSize,
+            compositionScale,
+            allowOverflowCanvas
         });
 
         const blob = await this._canvasToWebpBlob(canvas);
-        return { blob, cropRect };
+        return { blob, cropRect, renderMetadata: metadata };
     }
 
     /**
-     * Быстрый рендер превью токена из ручной области. Возвращает canvas TOKEN_SIZE.
+     * Быстрый рендер превью токена из ручной области.
+     * Превью использует тот же расширенный source-crop, что и финальный manual export.
      *
      * @param {object} params
      * @param {HTMLImageElement} params.image
      * @param {number} params.centerX
      * @param {number} params.centerY
      * @param {number} params.cropSize
-     * @param {Array<Array<{x:number, y:number}>>} [params.alphaPolygons] — полигоны в координатах исходника
-     * @returns {HTMLCanvasElement}
+     * @param {Array<Array<{x:number, y:number}>>} [params.alphaPolygons]
+     * @param {{image:HTMLImageElement, offsetX:number, offsetY:number, scale:number}|null} [params.customFrame]
+     * @param {number} [params.canvasSize]
+     * @param {number} [params.compositionScale=1]
+     * @param {boolean} [params.allowOverflowCanvas=false]
+     * @returns {{canvas: HTMLCanvasElement, metadata: object}}
      */
-    createTokenCanvasFromSelection({ image, centerX, centerY, cropSize, alphaPolygons = null }) {
+    createTokenCanvasFromSelection({ image, centerX, centerY, cropSize, alphaPolygons = null, customFrame = null, canvasSize = null, compositionScale = 1, allowOverflowCanvas = false }) {
         const img = image;
         if (!(img instanceof HTMLImageElement)) {
             throw new Error("[MTA AutoToken] createTokenCanvasFromSelection: image must be HTMLImageElement.");
@@ -225,7 +241,7 @@ export class AutoTokenService {
         const cropRect = this._createSafeCropRect({
             centerX,
             centerY,
-            cropSize,
+            cropSize: cropSize * MANUAL_SOURCE_CROP_SCALE,
             imgWidth,
             imgHeight
         });
@@ -236,7 +252,11 @@ export class AutoTokenService {
             sy: cropRect.sy,
             sw: cropRect.sw,
             sh: cropRect.sh,
-            alphaPolygons
+            alphaPolygons,
+            customFrame,
+            canvasSize,
+            compositionScale,
+            allowOverflowCanvas
         });
     }
 
@@ -295,37 +315,18 @@ export class AutoTokenService {
     }
 
     /**
-     * Рендерит TOKEN_SIZE canvas из квадратного crop исходного изображения.
+     * Рендерит квадратный canvas из квадратного crop исходного изображения.
+     * Ручной режим расширяет source-crop до вызова этого метода, поэтому итоговая композиция
+     * остаётся в масштабе x1 без отдельного scaleCorrection у dynamic ring.
      * @private
      */
-    _renderTokenCanvasFromCrop({ img, sx, sy, sw, sh, alphaPolygons = null }) {
-        // --- Final Token Canvas ---
-        const canvas = document.createElement("canvas");
-        canvas.width = TOKEN_SIZE;
-        canvas.height = TOKEN_SIZE;
-        const ctx = canvas.getContext("2d");
-
-        // Очистка (по умолчанию прозрачный)
-        ctx.clearRect(0, 0, TOKEN_SIZE, TOKEN_SIZE);
-
-        // Масштаб 0.85 — чтобы круг вписывался внутрь Dynamic Ring
-        const innerSize = TOKEN_SIZE * INNER_SCALE;
-        const innerRadius = innerSize / 2;
-        const offset = (TOKEN_SIZE - innerSize) / 2;
+    _renderTokenCanvasFromCrop({ img, sx, sy, sw, sh, alphaPolygons = null, customFrame = null, canvasSize = null, compositionScale = 1, allowOverflowCanvas = false }) {
+        const baseCanvasSize = Math.max(1, Math.round(Number.isFinite(canvasSize) ? canvasSize : (customFrame?.image ? CUSTOM_FRAME_TOKEN_SIZE : TOKEN_SIZE)));
+        const safeCompositionScale = Math.max(0.05, Number.isFinite(compositionScale) ? compositionScale : 1);
+        const baseCanvasCenter = baseCanvasSize / 2;
 
         const imgWidth = img.naturalWidth || img.width;
         const imgHeight = img.naturalHeight || img.height;
-
-        // Рисуем всё исходное изображение в координатах токена через transform,
-        // где [sx..sx+sw] x [sy..sy+sh] проецируется на innerSize.
-        // Это важно для ручной альфы: полигоны могут выходить за базовый crop-квадрат,
-        // и тогда дополнительные фрагменты не будут преждевременно обрезаны.
-        const sourceToTokenScale = innerSize / Math.max(1, sw);
-        const destX = offset - (sx * sourceToTokenScale);
-        const destY = offset - (sy * sourceToTokenScale);
-        const destW = imgWidth * sourceToTokenScale;
-        const destH = imgHeight * sourceToTokenScale;
-        ctx.drawImage(img, destX, destY, destW, destH);
 
         // Финальная маска: БАЗОВЫЙ КРУГ + (union) ДОПОЛНИТЕЛЬНЫЕ alpha-полигоны.
         // Это даёт ожидаемое поведение: "круговой токен + добавленные вырезки по альфе".
@@ -371,42 +372,235 @@ export class AutoTokenService {
             context.closePath();
         };
 
-        const maskCanvas = document.createElement("canvas");
-        maskCanvas.width = TOKEN_SIZE;
-        maskCanvas.height = TOKEN_SIZE;
-        const maskCtx = maskCanvas.getContext("2d");
+        const computeGeometry = ({
+            compositionScale: nextCompositionScale = safeCompositionScale,
+            drawOffsetX = 0,
+            drawOffsetY = 0
+        } = {}) => {
+            const innerSize = baseCanvasSize * INNER_SCALE * nextCompositionScale;
+            const innerRadius = innerSize / 2;
+            const offsetX = ((baseCanvasSize - innerSize) / 2) + drawOffsetX;
+            const offsetY = ((baseCanvasSize - innerSize) / 2) + drawOffsetY;
+            const sourceToTokenScale = innerSize / Math.max(1, sw);
+            const destX = offsetX - (sx * sourceToTokenScale);
+            const destY = offsetY - (sy * sourceToTokenScale);
+            const destW = imgWidth * sourceToTokenScale;
+            const destH = imgHeight * sourceToTokenScale;
+            const centerX = baseCanvasCenter + drawOffsetX;
+            const centerY = baseCanvasCenter + drawOffsetY;
 
-        maskCtx.clearRect(0, 0, TOKEN_SIZE, TOKEN_SIZE);
-        maskCtx.fillStyle = "#ffffff";
+            let frameRect = null;
+            if (customFrame?.image) {
+                const { image: frameImg, offsetX: fOffX = 0, offsetY: fOffY = 0, scale: fScale = 1.0 } = customFrame;
+                const frameNatW = frameImg.naturalWidth || frameImg.width || baseCanvasSize;
+                const frameNatH = frameImg.naturalHeight || frameImg.height || baseCanvasSize;
+                const maxDim = Math.max(frameNatW, frameNatH, 1);
+                const frameTargetSize = baseCanvasSize * fScale * nextCompositionScale;
+                const width = frameTargetSize * frameNatW / maxDim;
+                const height = frameTargetSize * frameNatH / maxDim;
+                const frameCenterX = centerX + fOffX;
+                const frameCenterY = centerY + fOffY;
+                frameRect = {
+                    image: frameImg,
+                    x: frameCenterX - (width / 2),
+                    y: frameCenterY - (height / 2),
+                    width,
+                    height
+                };
+            }
 
-        // 1) Базовый круг токена
-        maskCtx.beginPath();
-        maskCtx.arc(TOKEN_SIZE / 2, TOKEN_SIZE / 2, innerRadius, 0, Math.PI * 2);
-        maskCtx.closePath();
-        maskCtx.fill();
+            return {
+                innerSize,
+                innerRadius,
+                offsetX,
+                offsetY,
+                centerX,
+                centerY,
+                sourceToTokenScale,
+                destX,
+                destY,
+                destW,
+                destH,
+                frameRect
+            };
+        };
 
-        // 2) Дополнительные операции по альфе (add/subtract)
-        if (validOperations.length > 0) {
+        const computeContentBounds = (geometry) => {
+            let minX = geometry.centerX - geometry.innerRadius;
+            let maxX = geometry.centerX + geometry.innerRadius;
+            let minY = geometry.centerY - geometry.innerRadius;
+            let maxY = geometry.centerY + geometry.innerRadius;
+
             for (const entry of validOperations) {
-                maskCtx.save();
-                maskCtx.globalCompositeOperation = entry.operation === "subtract" ? "destination-out" : "source-over";
-                maskCtx.fillStyle = "#ffffff";
+                if (entry.operation !== "add") continue;
+                for (const point of entry.points) {
+                    const mappedX = geometry.offsetX + ((point.x - sx) * geometry.sourceToTokenScale);
+                    const mappedY = geometry.offsetY + ((point.y - sy) * geometry.sourceToTokenScale);
+                    if (mappedX < minX) minX = mappedX;
+                    if (mappedX > maxX) maxX = mappedX;
+                    if (mappedY < minY) minY = mappedY;
+                    if (mappedY > maxY) maxY = mappedY;
+                }
+            }
+
+            if (geometry.frameRect) {
+                minX = Math.min(minX, geometry.frameRect.x);
+                maxX = Math.max(maxX, geometry.frameRect.x + geometry.frameRect.width);
+                minY = Math.min(minY, geometry.frameRect.y);
+                maxY = Math.max(maxY, geometry.frameRect.y + geometry.frameRect.height);
+            }
+
+            return { minX, maxX, minY, maxY };
+        };
+
+        const baseGeometry = computeGeometry();
+        const baseBounds = allowOverflowCanvas ? computeContentBounds(baseGeometry) : null;
+        const overflowLeft = baseBounds ? Math.max(0, -baseBounds.minX) : 0;
+        const overflowRight = baseBounds ? Math.max(0, baseBounds.maxX - baseCanvasSize) : 0;
+        const overflowTop = baseBounds ? Math.max(0, -baseBounds.minY) : 0;
+        const overflowBottom = baseBounds ? Math.max(0, baseBounds.maxY - baseCanvasSize) : 0;
+
+        const minCanvasWidth = baseCanvasSize + overflowLeft + overflowRight;
+        const minCanvasHeight = baseCanvasSize + overflowTop + overflowBottom;
+        const finalCanvasSize = Math.max(
+            baseCanvasSize,
+            Math.ceil(allowOverflowCanvas ? Math.max(minCanvasWidth, minCanvasHeight) : baseCanvasSize)
+        );
+
+        const drawOffsetX = allowOverflowCanvas
+            ? Math.ceil(overflowLeft + ((finalCanvasSize - minCanvasWidth) / 2))
+            : 0;
+        const drawOffsetY = allowOverflowCanvas
+            ? Math.ceil(overflowTop + ((finalCanvasSize - minCanvasHeight) / 2))
+            : 0;
+
+        const geometry = computeGeometry({
+            compositionScale: safeCompositionScale,
+            drawOffsetX,
+            drawOffsetY
+        });
+        const {
+            innerRadius,
+            offsetX,
+            offsetY,
+            centerX,
+            centerY,
+            sourceToTokenScale,
+            destX,
+            destY,
+            destW,
+            destH,
+            frameRect
+        } = geometry;
+
+        // --- Final Token Canvas ---
+        const canvas = document.createElement("canvas");
+        canvas.width = finalCanvasSize;
+        canvas.height = finalCanvasSize;
+        const ctx = canvas.getContext("2d");
+
+        // Очистка (по умолчанию прозрачный)
+        ctx.clearRect(0, 0, finalCanvasSize, finalCanvasSize);
+
+        const createSubjectLayer = () => {
+            const layerCanvas = document.createElement("canvas");
+            layerCanvas.width = finalCanvasSize;
+            layerCanvas.height = finalCanvasSize;
+            const layerCtx = layerCanvas.getContext("2d");
+            layerCtx.clearRect(0, 0, finalCanvasSize, finalCanvasSize);
+            layerCtx.imageSmoothingEnabled = true;
+            layerCtx.imageSmoothingQuality = "high";
+            layerCtx.drawImage(img, destX, destY, destW, destH);
+            return { canvas: layerCanvas, ctx: layerCtx };
+        };
+
+        const buildMaskCanvas = ({ includeCircle = true, includeAdditions = true, includeSubtractions = true } = {}) => {
+            const maskCanvas = document.createElement("canvas");
+            maskCanvas.width = finalCanvasSize;
+            maskCanvas.height = finalCanvasSize;
+            const maskCtx = maskCanvas.getContext("2d");
+
+            maskCtx.clearRect(0, 0, finalCanvasSize, finalCanvasSize);
+            maskCtx.fillStyle = "#ffffff";
+
+            if (includeCircle) {
                 maskCtx.beginPath();
-                traceSmoothClosedPolygon(maskCtx, entry.points, (point) => ({
-                    x: offset + ((point.x - sx) * sourceToTokenScale),
-                    y: offset + ((point.y - sy) * sourceToTokenScale)
-                }));
+                maskCtx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2);
+                maskCtx.closePath();
                 maskCtx.fill();
-                maskCtx.restore();
+            }
+
+            if (validOperations.length > 0) {
+                for (const entry of validOperations) {
+                    if (entry.operation === "add" && !includeAdditions) continue;
+                    if (entry.operation === "subtract" && !includeSubtractions) continue;
+
+                    maskCtx.save();
+                    maskCtx.globalCompositeOperation = entry.operation === "subtract" ? "destination-out" : "source-over";
+                    maskCtx.fillStyle = "#ffffff";
+                    maskCtx.beginPath();
+                    traceSmoothClosedPolygon(maskCtx, entry.points, (point) => ({
+                        x: offsetX + ((point.x - sx) * sourceToTokenScale),
+                        y: offsetY + ((point.y - sy) * sourceToTokenScale)
+                    }));
+                    maskCtx.fill();
+                    maskCtx.restore();
+                }
+            }
+
+            return maskCanvas;
+        };
+
+        const drawMaskedSubjectLayer = (maskCanvas) => {
+            const { canvas: layerCanvas, ctx: layerCtx } = createSubjectLayer();
+            if (maskCanvas) {
+                layerCtx.save();
+                layerCtx.globalCompositeOperation = "destination-in";
+                layerCtx.drawImage(maskCanvas, 0, 0);
+                layerCtx.restore();
+            }
+            ctx.drawImage(layerCanvas, 0, 0);
+        };
+
+        const finalMaskCanvas = buildMaskCanvas({
+            includeCircle: true,
+            includeAdditions: true,
+            includeSubtractions: true
+        });
+
+        drawMaskedSubjectLayer(finalMaskCanvas);
+
+        if (frameRect) {
+            ctx.save();
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(frameRect.image, frameRect.x, frameRect.y, frameRect.width, frameRect.height);
+            ctx.restore();
+
+            const hasAdditiveAlpha = validOperations.some((entry) => entry.operation === "add");
+            if (hasAdditiveAlpha) {
+                const alphaOverlayMaskCanvas = buildMaskCanvas({
+                    includeCircle: false,
+                    includeAdditions: true,
+                    includeSubtractions: true
+                });
+                drawMaskedSubjectLayer(alphaOverlayMaskCanvas);
             }
         }
 
-        ctx.save();
-        ctx.globalCompositeOperation = "destination-in";
-        ctx.drawImage(maskCanvas, 0, 0);
-        ctx.restore();
-
-        return canvas;
+        return {
+            canvas,
+            metadata: {
+                baseCanvasSize,
+                finalCanvasSize,
+                viewportX: drawOffsetX,
+                viewportY: drawOffsetY,
+                viewportSize: baseCanvasSize,
+                textureScale: finalCanvasSize / Math.max(1, baseCanvasSize),
+                compositionScale: safeCompositionScale,
+                allowOverflowCanvas: Boolean(allowOverflowCanvas)
+            }
+        };
     }
 
     /**
