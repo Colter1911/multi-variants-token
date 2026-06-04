@@ -1,4 +1,5 @@
 import { IMAGE_TYPES, MODULE_ID } from "../constants.mjs";
+import { getStatusOptionsForSelectedSystem, normalizeStatusValue } from "../system-support.mjs";
 import { getActorModuleData, setActorModuleData } from "../utils/flag-utils.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
@@ -43,6 +44,32 @@ export class SettingsPanel extends HandlebarsApplicationMixin(ApplicationV2) {
 
   async _prepareContext() {
     const labelPrefix = this.imageType === IMAGE_TYPES.TOKEN ? "Token" : "Portrait";
+    const selectedStatus = String(this.image?.autoEnable?.status ?? "");
+    const normalizedSelectedStatus = normalizeStatusValue(selectedStatus);
+    const systemStatusOptions = getStatusOptionsForSelectedSystem();
+    const hasSelectedInPreset = systemStatusOptions.some((option) => {
+      return normalizeStatusValue(option.value) === normalizedSelectedStatus;
+    });
+    const statusOptions = [
+      {
+        value: "",
+        label: game.i18n.localize("MTA.StatusNotSelected"),
+        selected: !selectedStatus
+      },
+      ...systemStatusOptions.map((option) => ({
+        value: option.value,
+        label: option.label,
+        selected: normalizeStatusValue(option.value) === normalizedSelectedStatus
+      }))
+    ];
+
+    if (selectedStatus && !hasSelectedInPreset) {
+      statusOptions.push({
+        value: selectedStatus,
+        label: selectedStatus,
+        selected: true
+      });
+    }
 
     return {
       actorName: this.actor?.name ?? "",
@@ -50,7 +77,8 @@ export class SettingsPanel extends HandlebarsApplicationMixin(ApplicationV2) {
       imageType: this.imageType,
       label: `${labelPrefix} ${this.index + 1}`,
       isToken: this.imageType === IMAGE_TYPES.TOKEN,
-      randomEnabled: this.randomEnabled
+      randomEnabled: this.randomEnabled,
+      statusOptions
     };
   }
 

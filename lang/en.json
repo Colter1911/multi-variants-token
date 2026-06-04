@@ -72,5 +72,19 @@
   "MTA.ManualFrameScaleLabel": "Frame Scale",
   "MTA.ManualFrameReset": "Reset position",
   "MTA.ManualFrameRemoveWhiteBg": "Remove white background",
-  "MTA.ManualFrameDragHint": "Drag the frame in the preview area to reposition it."
+  "MTA.ManualFrameDragHint": "Drag the frame in the preview area to reposition it.",
+  "MTA.SystemModeSettingName": "Game system",
+  "MTA.SystemModeSettingHint": "Choose which game system Multi Token Art uses for HP and status automation.",
+  "MTA.SystemModeAuto": "Auto (detected system)",
+  "MTA.SystemModeDnd5e": "D&D 5e",
+  "MTA.SystemModePf2e": "Pathfinder 2e",
+  "MTA.SystemModeWfrp4e": "Warhammer Fantasy 4e",
+  "MTA.SystemModeCustom": "Custom HP paths",
+  "MTA.HpCurrentPathSettingName": "MTA HP Current Path",
+  "MTA.HpCurrentPathSettingHint": "Path to the current HP value in actor system data.",
+  "MTA.HpMaxPathSettingName": "MTA HP Max Path",
+  "MTA.HpMaxPathSettingHint": "Path to the maximum HP value in actor system data.",
+  "MTA.FirstRunSystemDialogTitle": "Multi Token Art Setup",
+  "MTA.FirstRunSystemDialogContent": "Choose the game system Multi Token Art should use for HP and status automation. You can change this later in module settings.",
+  "MTA.FirstRunSystemDialogConfirm": "Apply"
 }

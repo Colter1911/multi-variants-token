@@ -2,7 +2,17 @@ export const MODULE_ID = "multi-tokenart";
 
 export const SETTINGS = {
   HP_CURRENT_PATH: "hpCurrentPath",
-  HP_MAX_PATH: "hpMaxPath"
+  HP_MAX_PATH: "hpMaxPath",
+  SYSTEM_MODE: "systemMode",
+  SYSTEM_PROMPTED: "systemPrompted"
+};
+
+export const SYSTEM_MODES = {
+  AUTO: "auto",
+  DND5E: "dnd5e",
+  PF2E: "pf2e",
+  WFRP4E: "wfrp4e",
+  CUSTOM: "custom"
 };
 
 export const DEFAULT_HP_PATHS = {
@@ -15,6 +25,11 @@ export const IMAGE_LIMIT = 100;
 export const IMAGE_TYPES = {
   TOKEN: "token",
   PORTRAIT: "portrait"
+};
+
+export const MTA_EFFECT_ATTRIBUTES = {
+  TOKEN_IMAGE_INDEX: "mta.settoken",
+  PORTRAIT_IMAGE_INDEX: "mta.setportrait"
 };
 
 export const STATUS_CONDITIONS = Object.freeze([
@@ -72,5 +87,8 @@ export const TOKEN_FLAG_KEYS = {
   ACTIVE_PORTRAIT_IMAGE_ID: "activePortraitImageId",
   ORIGINAL_RING: "originalRing",
   ORIGINAL_ROTATION: "originalRotation",
-  LAST_UPDATE: "lastUpdate"
+  LAST_UPDATE: "lastUpdate",
+  MANAGED_TOKEN_IMAGE_SRC: "managedTokenImageSrc",
+  EXTERNAL_TOKEN_IMAGE_SRC: "externalTokenImageSrc",
+  PRE_EXTERNAL_TOKEN_IMAGE_ID: "preExternalTokenImageId"
 };

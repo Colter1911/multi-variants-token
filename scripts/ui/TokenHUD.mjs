@@ -5,10 +5,23 @@ const HOOK_GUARD = Symbol.for("multi-tokenart.hud-hooks-registered");
 const HUD_BUTTON_CLASS = "control-icon multi-tokenart-open-manager";
 const ACTOR_HEADER_BUTTON_CLASS = `${MODULE_ID}-open-manager`;
 
+function getHudButtonSelector() {
+  const title = String(game.i18n?.localize?.("MTA.TokenHUDButton") ?? "Multi Token Art")
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'");
+  return [
+    ".multi-tokenart-open-manager",
+    `[data-action='${MODULE_ID}-open-manager']`,
+    `[title='${title}']`
+  ].join(", ");
+}
+
 function isTokenHudApplication(app) {
   const tokenHudClass = foundry?.applications?.hud?.TokenHUD;
   if (tokenHudClass && app instanceof tokenHudClass) return true;
-  return app?.constructor?.name === "TokenHUD";
+  const markers = [app?.constructor?.name, app?.id, app?.options?.id]
+    .map((value) => String(value ?? "").toLowerCase());
+  return markers.some((value) => value === "tokenhud" || value === "token-hud" || value.includes("tokenhud"));
 }
 
 function isActorDocument(documentLike) {
@@ -16,7 +29,7 @@ function isActorDocument(documentLike) {
 }
 
 function resolveTokenDocument(tokenLike) {
-  const candidate = tokenLike?.document ?? tokenLike ?? null;
+  const candidate = tokenLike?.document ?? tokenLike?.token?.document ?? tokenLike ?? null;
   if (!candidate) return null;
   const isTokenDocument = candidate.documentName === "Token" || candidate.constructor?.name === "TokenDocument";
   return isTokenDocument ? candidate : null;
@@ -30,7 +43,8 @@ function resolveActor(actorLike) {
 
 export function openManagerForActor(actor, tokenDocument = null) {
   const resolvedActor = resolveActor(actor);
-  if (!resolvedActor || !resolvedActor.isOwner) return;
+  if (!resolvedActor) return;
+  if (!game.user?.isGM && !resolvedActor.isOwner) return;
 
   const app = new MultiTokenArtManager({ actor: resolvedActor, tokenDocument: resolveTokenDocument(tokenDocument) });
   void app.render({ force: true });
@@ -43,13 +57,19 @@ function openManagerForTokenLike(tokenLike) {
 }
 
 function buildButtonConfig(tokenLike) {
+  const open = () => openManagerForTokenLike(tokenLike);
   return {
     name: `${MODULE_ID}-open-manager`,
+    action: `${MODULE_ID}-open-manager`,
+    class: `${MODULE_ID}-open-manager`,
+    cssClass: `${MODULE_ID}-open-manager`,
     title: game.i18n.localize("MTA.TokenHUDButton"),
+    label: game.i18n.localize("MTA.TokenHUDButton"),
     icon: "fas fa-user-cog",
     buttonClass: `${MODULE_ID}-open-manager`,
-    onClick: () => openManagerForTokenLike(tokenLike),
-    callback: () => openManagerForTokenLike(tokenLike)
+    onClick: open,
+    onclick: open,
+    callback: open
   };
 }
 
@@ -81,6 +101,22 @@ function createHudButton(tokenLike) {
   return button;
 }
 
+function findHudButtons(container) {
+  if (!container?.querySelectorAll) return [];
+  return Array.from(container.querySelectorAll(getHudButtonSelector()));
+}
+
+function removeDuplicateHudButtons(container) {
+  const buttons = findHudButtons(container);
+  if (buttons.length <= 1) return buttons;
+
+  for (const duplicate of buttons.slice(1)) {
+    duplicate.remove();
+  }
+
+  return buttons.slice(0, 1);
+}
+
 function injectHudButtonFromTokenLike(tokenLike, element) {
   const tokenDocument = resolveTokenDocument(tokenLike);
   const actor = tokenDocument?.actor ?? tokenLike?.actor;
@@ -92,18 +128,13 @@ function injectHudButtonFromTokenLike(tokenLike, element) {
     return;
   }
 
-  if (!actor.isOwner) {
+  if (!game.user?.isGM && !actor.isOwner) {
     console.warn("Multi Token Art | User is not owner of:", actor.name);
     return;
   }
 
   if (!element || !element.querySelector) {
     console.warn("Multi Token Art | HUD element invalid:", element);
-    return;
-  }
-
-  if (element.querySelector(".multi-tokenart-open-manager")) {
-    console.log("Multi Token Art | Button already exists.");
     return;
   }
 
@@ -121,9 +152,18 @@ function injectHudButtonFromTokenLike(tokenLike, element) {
     container = globalHud;
   }
 
+  const existingButtons = removeDuplicateHudButtons(container);
+  if (existingButtons.length) {
+    console.log("Multi Token Art | Button already exists.");
+    return;
+  }
+
   // Try specific column divs first. Prioritize left column as requested.
   let column = container.querySelector("div.col.left");
   if (!column) column = container.querySelector("div.col.right");
+  if (!column) column = container.querySelector(".col.left");
+  if (!column) column = container.querySelector(".col.right");
+  if (!column) column = container.querySelector(".token-hud-actions, .control-icons, .controls, .palette");
 
   // Basic fallback to any col div but verify it's a div
   if (!column) column = container.querySelector("div.col");
@@ -156,6 +196,7 @@ function injectHudButtonFromTokenLike(tokenLike, element) {
 
   console.log("Multi Token Art | Injecting button into:", column);
   column.appendChild(createHudButton(tokenLike));
+  removeDuplicateHudButtons(container);
 }
 
 export function registerTokenHudButton() {
@@ -177,13 +218,17 @@ export function registerTokenHudButton() {
   // Foundry v13 ApplicationV2 hook: reliable fallback for TokenHUD.
   Hooks.on("renderApplicationV2", (application, element) => {
     if (!isTokenHudApplication(application)) return;
-    injectHudButtonFromTokenLike(application.object, element);
+    const tokenLike = application.object?.document ?? application.object ?? application.token ?? canvas?.tokens?.controlled?.[0]?.document;
+    injectHudButtonFromTokenLike(tokenLike, element);
+    window.setTimeout(() => injectHudButtonFromTokenLike(tokenLike, element), 0);
   });
 
   // Legacy compatibility fallback.
   Hooks.on("renderTokenHUD", (hud, htmlLike) => {
     const element = htmlLike?.[0] ?? htmlLike;
-    injectHudButtonFromTokenLike(hud?.object?.document ?? hud?.object ?? hud, element);
+    const tokenLike = hud?.object?.document ?? hud?.object ?? hud;
+    injectHudButtonFromTokenLike(tokenLike, element);
+    window.setTimeout(() => injectHudButtonFromTokenLike(tokenLike, element), 0);
   });
 }
 

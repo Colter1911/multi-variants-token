@@ -1,4 +1,5 @@
-import { MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
+import { MODULE_ID, MTA_EFFECT_ATTRIBUTES, TOKEN_FLAG_KEYS } from "../constants.mjs";
+import { getTokenStatusValues, hasMatchingStatus } from "../system-support.mjs";
 import { getActorModuleData } from "../utils/flag-utils.mjs";
 import { resolveHpData } from "../utils/hp-resolver.mjs";
 import { applyAutoRotate } from "./AutoRotate.mjs";
@@ -19,40 +20,172 @@ function getLinkedPortraitByTokenImage({ actorData, tokenImageId }) {
   return sortedPortraits[tokenIndex] ?? null;
 }
 
+function normalizeEffectChangeKey(key) {
+  return String(key ?? "").trim().toLowerCase();
+}
 
-export async function runAutoActivation({ actor, tokenDocument }) {
+function getEffectChanges(effect) {
+  return Array.isArray(effect?.changes) ? effect.changes : [];
+}
+
+function parseImageIndex(value) {
+  const index = Number.parseInt(String(value ?? "").trim(), 10);
+  return Number.isFinite(index) && index > 0 ? index : null;
+}
+
+function getImageByIndex(imageList, index) {
+  if (!index) return null;
+  return sortImagesByOrder(imageList ?? [])[index - 1] ?? null;
+}
+
+export function activeEffectHasMtaImageOverride(effect) {
+  return getEffectChanges(effect).some((change) => {
+    const key = normalizeEffectChangeKey(change?.key);
+    return key === MTA_EFFECT_ATTRIBUTES.TOKEN_IMAGE_INDEX
+      || key === MTA_EFFECT_ATTRIBUTES.PORTRAIT_IMAGE_INDEX;
+  });
+}
+
+function getActiveEffectImageOverrideIndexes(actor) {
+  const result = { tokenIndex: null, portraitIndex: null };
+  const effects = actor?.effects;
+  if (!effects) return result;
+
+  for (const effect of effects) {
+    if (effect?.disabled) continue;
+
+    for (const change of getEffectChanges(effect)) {
+      const key = normalizeEffectChangeKey(change?.key);
+      const index = parseImageIndex(change?.value);
+      if (!index) continue;
+
+      if (key === MTA_EFFECT_ATTRIBUTES.TOKEN_IMAGE_INDEX) {
+        result.tokenIndex = index;
+      } else if (key === MTA_EFFECT_ATTRIBUTES.PORTRAIT_IMAGE_INDEX) {
+        result.portraitIndex = index;
+      }
+    }
+  }
+
+  return result;
+}
+
+function getTokenTextureSrc(tokenDocument) {
+  return tokenDocument?.texture?.src ?? null;
+}
+
+export function isExternalTokenImageOverrideActive(tokenDocument) {
+  if (!tokenDocument) return false;
+
+  const externalSrc = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.EXTERNAL_TOKEN_IMAGE_SRC);
+  if (!externalSrc) return false;
+
+  return getTokenTextureSrc(tokenDocument) === externalSrc;
+}
+
+async function updateTokenOverrideFlags(tokenDocument, updates) {
+  if (!tokenDocument || foundry.utils.isEmpty(updates)) return;
+  await tokenDocument.update(updates, { mtaManualUpdate: true });
+}
+
+export async function handleExternalTokenImageChange({ actor, tokenDocument, newSrc }) {
+  if (!actor || !tokenDocument) return null;
+
+  const nextSrc = typeof newSrc === "string" ? newSrc : "";
+  if (!nextSrc) return null;
+
+  const data = getActorModuleData(actor);
+  const tokenImages = data.tokenImages ?? [];
+  const matchedImage = tokenImages.find((image) => image?.src === nextSrc) ?? null;
+  const currentActiveId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
+  const managedSrc = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.MANAGED_TOKEN_IMAGE_SRC);
+  const externalSrc = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.EXTERNAL_TOKEN_IMAGE_SRC);
+  const preExternalId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.PRE_EXTERNAL_TOKEN_IMAGE_ID);
+
+  if (matchedImage) {
+    await updateTokenOverrideFlags(tokenDocument, {
+      [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: matchedImage.id,
+      [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.MANAGED_TOKEN_IMAGE_SRC}`]: matchedImage.src,
+      [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.EXTERNAL_TOKEN_IMAGE_SRC}`]: null,
+      [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.PRE_EXTERNAL_TOKEN_IMAGE_ID}`]: null
+    });
+    return { matchedModuleImage: true, reset: Boolean(externalSrc), imageId: matchedImage.id };
+  }
+
+  if (managedSrc && nextSrc === managedSrc) {
+    await updateTokenOverrideFlags(tokenDocument, {
+      [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.EXTERNAL_TOKEN_IMAGE_SRC}`]: null,
+      [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.PRE_EXTERNAL_TOKEN_IMAGE_ID}`]: null
+    });
+    return { reset: Boolean(externalSrc) };
+  }
+
+  const storedPreExternalId = preExternalId ?? currentActiveId ?? null;
+  await updateTokenOverrideFlags(tokenDocument, {
+    [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.EXTERNAL_TOKEN_IMAGE_SRC}`]: nextSrc,
+    [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.PRE_EXTERNAL_TOKEN_IMAGE_ID}`]: storedPreExternalId
+  });
+
+  return { external: true };
+}
+
+
+export async function runAutoActivation({
+  actor,
+  tokenDocument,
+  forceTokenImageUpdate = false,
+  forcePortraitImageUpdate = false,
+  ignoreManualSelection = false
+}) {
   if (!actor || !tokenDocument) return;
 
   const data = getActorModuleData(actor);
+  const effectOverrides = getActiveEffectImageOverrideIndexes(actor);
   let selectedTokenImageId = null;
 
   // 1. Process TOKEN Images
   const currentTokenId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
-  const tokenSelection = findBestImageForHp({
-    actor,
-    tokenDocument,
-    imageList: data.tokenImages,
-    activeId: currentTokenId,
-    preConditionFlagKey: "preConditionImageId"
-  });
+  const externalTokenOverrideActive = isExternalTokenImageOverrideActive(tokenDocument);
 
-  if (tokenSelection && tokenSelection.id !== currentTokenId) {
-    console.log("[MTA-DEBUG] Auto-Activating Token Image", tokenSelection.src);
-    // Pass the selection object directly to avoid race conditions with setting flags
-    await applyTokenImageById({ actor, tokenDocument, imageObject: tokenSelection });
-    selectedTokenImageId = tokenSelection.id;
+  if (externalTokenOverrideActive) {
+    selectedTokenImageId = currentTokenId ?? null;
   } else {
-    selectedTokenImageId = currentTokenId ?? tokenSelection?.id ?? null;
+    const tokenSelection = getImageByIndex(data.tokenImages, effectOverrides.tokenIndex)
+      ?? findBestImageForHp({
+        actor,
+        tokenDocument,
+        imageList: data.tokenImages,
+        activeId: currentTokenId,
+        preConditionFlagKey: "preConditionImageId",
+        ignoreManualSelection
+      });
+
+    if (tokenSelection && (forceTokenImageUpdate || tokenSelection.id !== currentTokenId)) {
+      console.log("[MTA-DEBUG] Auto-Activating Token Image", tokenSelection.src);
+      // Pass the selection object directly to avoid race conditions with setting flags
+      await applyTokenImageById({ actor, tokenDocument, imageObject: tokenSelection });
+      selectedTokenImageId = tokenSelection.id;
+    } else {
+      selectedTokenImageId = currentTokenId ?? tokenSelection?.id ?? null;
+    }
   }
 
   // 2. Process PORTRAIT Images
   const currentPortraitId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_PORTRAIT_IMAGE_ID);
-  const linkedPortrait = getLinkedPortraitByTokenImage({
-    actorData: data,
-    tokenImageId: selectedTokenImageId
-  });
+  const portraitOverride = getImageByIndex(data.portraitImages, effectOverrides.portraitIndex);
+  const linkedPortrait = externalTokenOverrideActive
+    ? null
+    : getLinkedPortraitByTokenImage({
+      actorData: data,
+      tokenImageId: selectedTokenImageId
+    });
 
-  if (data.global.linkTokenPortrait) {
+  if (portraitOverride) {
+    if (forcePortraitImageUpdate || portraitOverride.id !== currentPortraitId) {
+      console.log("[MTA-DEBUG] Active Effect Portrait activation", portraitOverride.src);
+      await applyPortraitById({ actor, tokenDocument, imageObject: portraitOverride });
+    }
+  } else if (data.global.linkTokenPortrait) {
     // Link mode: portrait follows token by visual order.
     // If no portrait pair exists for the selected token index, keep current portrait unchanged.
     if (linkedPortrait && linkedPortrait.id !== currentPortraitId) {
@@ -65,10 +198,11 @@ export async function runAutoActivation({ actor, tokenDocument }) {
       tokenDocument,
       imageList: data.portraitImages,
       activeId: currentPortraitId,
-      preConditionFlagKey: "preConditionPortraitId"
+      preConditionFlagKey: "preConditionPortraitId",
+      ignoreManualSelection
     });
 
-    if (portraitSelection && portraitSelection.id !== currentPortraitId) {
+    if (portraitSelection && (forcePortraitImageUpdate || portraitSelection.id !== currentPortraitId)) {
       console.log("[MTA-DEBUG] Auto-Activating Portrait Image", portraitSelection.src);
       await applyPortraitById({ actor, tokenDocument, imageObject: portraitSelection });
     }
@@ -84,7 +218,7 @@ export async function runAutoActivation({ actor, tokenDocument }) {
 /**
  * Generic function to find the best image based on HP state
  */
-export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, preConditionFlagKey }) {
+export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, preConditionFlagKey, ignoreManualSelection = false }) {
   // Safety check
   if (!imageList || !imageList.length) return null;
 
@@ -93,70 +227,14 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
   const hpPercent = hp.percent;
   const getWoundedThreshold = (image) => Number(image?.autoEnable?.woundedPercent ?? 50);
 
-  const getTokenStatuses = (tokenDoc) => {
-    if (!tokenDoc) return [];
-
-    const statuses = new Set();
-    const pushStatus = (value) => {
-      if (value === null || value === undefined) return;
-      const label = String(value).trim();
-      if (label) statuses.add(label);
-    };
-
-    const processEffect = (effect) => {
-      if (!effect) return;
-
-      pushStatus(effect?.name);
-      pushStatus(effect?.label);
-      pushStatus(effect?.statusId);
-      pushStatus(effect?.slug);
-
-      const statusesField = effect?.statuses;
-      if (statusesField instanceof Set) {
-        for (const entry of statusesField) pushStatus(entry);
-      } else if (Array.isArray(statusesField)) {
-        for (const entry of statusesField) pushStatus(entry);
-      }
-
-      const nestedStatus = effect?.statuses?.status;
-      if (Array.isArray(nestedStatus)) {
-        for (const entry of nestedStatus) pushStatus(entry);
-      }
-
-      const id = effect?._id ?? effect?.id;
-      if (id && typeof tokenDoc.hasStatusEffect === "function") {
-        try {
-          if (tokenDoc.hasStatusEffect(id)) pushStatus(effect?.name ?? effect?.label ?? id);
-        } catch (_err) {
-          // ignore hasStatusEffect failures for malformed ids
-        }
-      }
-    };
-
-    const actorEffects = tokenDoc?.actor?.effects;
-    if (actorEffects) {
-      for (const effect of actorEffects) {
-        if (effect?.disabled) continue;
-        processEffect(effect);
-      }
-    }
-
-    const tokenEffects = tokenDoc?.effects;
-    if (Array.isArray(tokenEffects)) {
-      for (const entry of tokenEffects) pushStatus(entry);
-    }
-
-    return Array.from(statuses);
-  };
-
-  const tokenStatuses = getTokenStatuses(tokenDocument);
+  const tokenStatuses = getTokenStatusValues(tokenDocument);
   const hasStatusMatch = (image) => {
     if (!image?.autoEnable?.enabled) return false;
 
     const wantedStatus = String(image.autoEnable?.status ?? "").trim();
     if (!wantedStatus) return false;
 
-    return tokenStatuses.some((statusValue) => statusValue.localeCompare(wantedStatus, undefined, { sensitivity: "accent" }) === 0);
+    return hasMatchingStatus(tokenStatuses, wantedStatus);
   };
 
   // Logic: Find the highest priority matching image
@@ -192,7 +270,7 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
   // 2. Manual Image Check (Persistence)
   const activeImg = imageList.find(i => i.id === activeId);
 
-  if (activeImg) {
+  if (activeImg && !ignoreManualSelection) {
     // Is the current image "Special" (Die/Status/Wounded)?
     const hasConfiguredStatus = Boolean(String(activeImg.autoEnable?.status ?? "").trim());
     const isSpecialInfo = activeImg.autoEnable?.enabled
@@ -261,7 +339,10 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
     "texture.src": image.src,
     "texture.scaleX": image.scaleX ?? 1,
     "texture.scaleY": image.scaleY ?? 1,
-    [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id
+    [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id,
+    [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.MANAGED_TOKEN_IMAGE_SRC}`]: image.src,
+    [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.EXTERNAL_TOKEN_IMAGE_SRC}`]: null,
+    [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.PRE_EXTERNAL_TOKEN_IMAGE_ID}`]: null
   };
 
   const updateOptions = {

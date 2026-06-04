@@ -1,16 +1,26 @@
-import { MODULE_ID, SETTINGS, TOKEN_FLAG_KEYS } from "./constants.mjs";
-import { registerSettings, applySystemPresetIfNeeded } from "./settings.mjs";
+import { MODULE_ID, TOKEN_FLAG_KEYS } from "./constants.mjs";
+import { registerSettings, applySystemPresetIfNeeded, showFirstRunSystemDialogIfNeeded } from "./settings.mjs";
+import { getConfiguredHpPaths as getConfiguredSystemHpPaths, isPf2eConditionItem } from "./system-support.mjs";
 import { registerTokenHudButton, openManagerForTokenDocument, openManagerForActor } from "./ui/TokenHUD.mjs";
 import { registerFileSocketHandlers } from "./utils/file-utils.mjs";
-import { runAutoActivation, applyTokenImageById, applyPortraitById } from "./logic/AutoActivation.mjs";
+import {
+  runAutoActivation,
+  applyTokenImageById,
+  applyPortraitById,
+  handleExternalTokenImageChange,
+  activeEffectHasMtaImageOverride
+} from "./logic/AutoActivation.mjs";
 import { pickRandomImage } from "./logic/RandomMode.mjs";
 import { actorHasModuleFlags, getActorModuleData } from "./utils/flag-utils.mjs";
 
 console.log("✅ Multi Token Art | module.mjs loaded");
 
 const ACTOR_SHEET_BUTTON_CLASS = `${MODULE_ID}-open-manager-sheet-button`;
-const FALLBACK_HP_CURRENT_PATH = "system.attributes.hp.value";
-const FALLBACK_HP_MAX_PATH = "system.attributes.hp.max";
+const MTA_EFFECT_FORCE_OPTIONS = {
+  forceTokenImageUpdate: true,
+  forcePortraitImageUpdate: true,
+  ignoreManualSelection: true
+};
 
 function openManagerForControlledToken() {
   const controlled = canvas?.tokens?.controlled?.[0]?.document ?? null;
@@ -46,6 +56,12 @@ function pushActorSheetHeaderControl(sheetLike, controls) {
 
   const actionId = `${MODULE_ID}.open-manager`;
   const localized = game.i18n.localize("MTA.OpenManager");
+  const tokenDocument = resolveTokenDocumentFromSheet(sheetLike);
+  const open = (event) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    openManagerForActor(actor, tokenDocument);
+  };
 
   if (controls.some((control) =>
     control?.action === actionId
@@ -56,16 +72,43 @@ function pushActorSheetHeaderControl(sheetLike, controls) {
     return;
   }
 
-  const tokenDocument = resolveTokenDocumentFromSheet(sheetLike);
-
   controls.unshift({
     action: actionId,
     class: ACTOR_SHEET_BUTTON_CLASS,
     icon: "fas fa-masks-theater",
     label: localized,
     title: localized,
-    onClick: () => openManagerForActor(actor, tokenDocument)
+    onClick: open,
+    onclick: open,
+    callback: open
   });
+}
+
+function bindActorSheetHeaderControl(sheetLike, htmlLike) {
+  const actor = resolveActorFromSheet(sheetLike);
+  if (!actor || !actor.isOwner) return;
+
+  const roots = [
+    htmlLike instanceof HTMLElement ? htmlLike : (htmlLike?.[0] ?? htmlLike),
+    sheetLike?.element instanceof HTMLElement ? sheetLike.element : null,
+    sheetLike?.id ? document.getElementById(sheetLike.id) : null
+  ].filter((root, index, list) => root?.querySelectorAll && list.indexOf(root) === index);
+
+  if (!roots.length) return;
+
+  const tokenDocument = resolveTokenDocumentFromSheet(sheetLike);
+  const selector = `.${ACTOR_SHEET_BUTTON_CLASS}, [data-action='${MODULE_ID}.open-manager']`;
+  for (const root of roots) {
+    for (const button of root.querySelectorAll(selector)) {
+      if (button.dataset.mtaClickBound === "true") continue;
+      button.dataset.mtaClickBound = "true";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openManagerForActor(actor, tokenDocument);
+      }, { capture: true });
+    }
+  }
 }
 
 function registerActorHeaderButtons() {
@@ -82,9 +125,7 @@ function registerActorHeaderButtons() {
 }
 
 function getConfiguredHpPaths() {
-  const currentPath = game.settings.get(MODULE_ID, SETTINGS.HP_CURRENT_PATH) || FALLBACK_HP_CURRENT_PATH;
-  const maxPath = game.settings.get(MODULE_ID, SETTINGS.HP_MAX_PATH) || FALLBACK_HP_MAX_PATH;
-  return { currentPath, maxPath };
+  return getConfiguredSystemHpPaths();
 }
 
 function getParentPath(path) {
@@ -128,6 +169,10 @@ function hasTokenHpLikeChange(changes) {
   }
 
   return false;
+}
+
+function hasTokenTextureSrcChange(changes) {
+  return Boolean(changes && foundry.utils.hasProperty(changes, "texture.src"));
 }
 
 function canCurrentUserUpdateToken(tokenDocument) {
@@ -199,7 +244,18 @@ function setModuleApi() {
 const _actorAutoActivationDebounced = new Map();
 const _actorAutoActivationRunning = new Set();
 
-function scheduleAutoActivationForActor(actor) {
+async function runAutoActivationForActor(actor, runOptions = {}) {
+  if (!actor || !actorHasModuleFlags(actor)) return;
+
+  for (const token of actor.getActiveTokens(true)) {
+    const tokenDocument = token.document;
+    if (tokenDocument && shouldCurrentUserRunTokenAutomation(tokenDocument)) {
+      await runAutoActivation({ actor, tokenDocument, ...runOptions });
+    }
+  }
+}
+
+function scheduleAutoActivationForActor(actor, runOptions = {}) {
   if (!actor || !actorHasModuleFlags(actor)) return;
 
   const actorId = actor.id;
@@ -213,13 +269,7 @@ function scheduleAutoActivationForActor(actor) {
     if (_actorAutoActivationRunning.has(actorId)) return;
     _actorAutoActivationRunning.add(actorId);
     try {
-      if (!actorHasModuleFlags(actor)) return;
-      for (const token of actor.getActiveTokens(true)) {
-        const tokenDocument = token.document;
-        if (tokenDocument && shouldCurrentUserRunTokenAutomation(tokenDocument)) {
-          await runAutoActivation({ actor, tokenDocument });
-        }
-      }
+      await runAutoActivationForActor(actor, runOptions);
     } finally {
       _actorAutoActivationRunning.delete(actorId);
     }
@@ -238,6 +288,16 @@ function resolveActorFromActiveEffect(effect) {
   return null;
 }
 
+function resolveActorFromEmbeddedItem(item) {
+  const parent = item?.parent;
+  if (parent?.documentName === "Actor") return parent;
+  return null;
+}
+
+function getActiveEffectRunOptions(effect) {
+  return activeEffectHasMtaImageOverride(effect) ? MTA_EFFECT_FORCE_OPTIONS : {};
+}
+
 Hooks.once("init", async () => {
   registerSettings();
   registerTokenHudButton();
@@ -250,8 +310,8 @@ Hooks.once("init", async () => {
   ]);
 });
 
-Hooks.once("ready", () => {
-  applySystemPresetIfNeeded();
+Hooks.once("ready", async () => {
+  await applySystemPresetIfNeeded();
   registerFileSocketHandlers();
   // Re-apply API in case another package overwrote it after init.
   setModuleApi();
@@ -275,6 +335,13 @@ Hooks.once("ready", () => {
     openManagerForActor,
     openManagerForActorById
   };
+
+  void showFirstRunSystemDialogIfNeeded();
+});
+
+Hooks.on("renderApplicationV2", (application, element) => {
+  bindActorSheetHeaderControl(application, element);
+  window.setTimeout(() => bindActorSheetHeaderControl(application, element), 0);
 });
 
 Hooks.on("updateActor", (actor, changes, options) => {
@@ -287,12 +354,23 @@ Hooks.on("updateActor", (actor, changes, options) => {
   scheduleAutoActivationForActor(actor);
 });
 
-Hooks.on("updateToken", (tokenDocument, changes, options) => {
+Hooks.on("updateToken", async (tokenDocument, changes, options) => {
   if (options?.mtaManualUpdate) return;
 
   const actor = tokenDocument.actor;
   if (!actor) return;
   if (!actorHasModuleFlags(actor)) return;
+
+  if (hasTokenTextureSrcChange(changes)) {
+    if (!shouldCurrentUserRunTokenAutomation(tokenDocument)) return;
+
+    const newSrc = foundry.utils.getProperty(changes, "texture.src") ?? tokenDocument.texture?.src ?? null;
+    const result = await handleExternalTokenImageChange({ actor, tokenDocument, newSrc });
+    if (result?.reset || result?.matchedModuleImage) {
+      await runAutoActivation({ actor, tokenDocument, ...MTA_EFFECT_FORCE_OPTIONS });
+    }
+    return;
+  }
 
   const hpLikeChanged = hasTokenHpLikeChange(changes);
   if (!hpLikeChanged) return;
@@ -304,18 +382,40 @@ Hooks.on("updateToken", (tokenDocument, changes, options) => {
 Hooks.on("createActiveEffect", (effect, _options) => {
   const actor = resolveActorFromActiveEffect(effect);
   if (!actor) return;
-  scheduleAutoActivationForActor(actor);
+  scheduleAutoActivationForActor(actor, getActiveEffectRunOptions(effect));
 });
 
 Hooks.on("updateActiveEffect", (effect, _changes, options) => {
   if (options?.mtaManualUpdate) return;
   const actor = resolveActorFromActiveEffect(effect);
   if (!actor) return;
-  scheduleAutoActivationForActor(actor);
+  scheduleAutoActivationForActor(actor, getActiveEffectRunOptions(effect));
 });
 
 Hooks.on("deleteActiveEffect", (effect, _options) => {
   const actor = resolveActorFromActiveEffect(effect);
+  if (!actor) return;
+  scheduleAutoActivationForActor(actor, getActiveEffectRunOptions(effect));
+});
+
+Hooks.on("createItem", (item, _options) => {
+  if (!isPf2eConditionItem(item)) return;
+  const actor = resolveActorFromEmbeddedItem(item);
+  if (!actor) return;
+  scheduleAutoActivationForActor(actor);
+});
+
+Hooks.on("updateItem", (item, _changes, options) => {
+  if (options?.mtaManualUpdate) return;
+  if (!isPf2eConditionItem(item)) return;
+  const actor = resolveActorFromEmbeddedItem(item);
+  if (!actor) return;
+  scheduleAutoActivationForActor(actor);
+});
+
+Hooks.on("deleteItem", (item, _options) => {
+  if (!isPf2eConditionItem(item)) return;
+  const actor = resolveActorFromEmbeddedItem(item);
   if (!actor) return;
   scheduleAutoActivationForActor(actor);
 });
@@ -394,6 +494,8 @@ Hooks.on("createToken", async (tokenDocument) => {
 });
 
 Hooks.on("renderActorSheet", (sheet, htmlLike) => {
+  bindActorSheetHeaderControl(sheet, htmlLike);
+
   const tokenDocument = sheet.token?.document;
   if (!tokenDocument) return;
 

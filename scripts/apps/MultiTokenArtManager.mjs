@@ -1,4 +1,5 @@
-import { IMAGE_LIMIT, IMAGE_TYPES, MODULE_ID, STATUS_CONDITIONS, TOKEN_FLAG_KEYS } from "../constants.mjs";
+import { IMAGE_LIMIT, IMAGE_TYPES, MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
+import { getStatusOptionsForSelectedSystem, normalizeStatusValue } from "../system-support.mjs";
 import { getActorModuleData, setActorModuleData } from "../utils/flag-utils.mjs";
 import { ensureActorDirectory, uploadFileToActorFolder } from "../utils/file-utils.mjs";
 import { pickRandomImage, sortImagesByOrder } from "../logic/RandomMode.mjs";
@@ -191,18 +192,31 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       const image = list[index];
       if (image) {
         const selectedStatus = String(image.autoEnable?.status ?? "");
+        const normalizedSelectedStatus = normalizeStatusValue(selectedStatus);
+        const systemStatusOptions = getStatusOptionsForSelectedSystem();
+        const hasSelectedInPreset = systemStatusOptions.some((option) => {
+          return normalizeStatusValue(option.value) === normalizedSelectedStatus;
+        });
         const statusOptions = [
           {
             value: "",
             label: game.i18n.localize("MTA.StatusNotSelected"),
             selected: !selectedStatus
           },
-          ...STATUS_CONDITIONS.map((statusLabel) => ({
-            value: statusLabel,
-            label: statusLabel,
-            selected: statusLabel === selectedStatus
+          ...systemStatusOptions.map((option) => ({
+            value: option.value,
+            label: option.label,
+            selected: normalizeStatusValue(option.value) === normalizedSelectedStatus
           }))
         ];
+
+        if (selectedStatus && !hasSelectedInPreset) {
+          statusOptions.push({
+            value: selectedStatus,
+            label: selectedStatus,
+            selected: true
+          });
+        }
 
         activeSettingsData = {
           label: `${imageType === IMAGE_TYPES.TOKEN ? "Token" : "Portrait"} #${index + 1}`,

@@ -24,9 +24,10 @@
 Ключевые hooks:
 
 - `init`: регистрирует настройки, кнопки Token HUD, кнопки в заголовках actor sheet, публичный API и preload Handlebars partials.
-- `ready`: применяет системный HP preset, регистрирует socket handlers, повторно выставляет API, для GM принудительно ставит core `dynamicTokenRingScaling` в `grid`, добавляет `globalThis.MultiTokenArtDebug`.
-- `updateActor` и `updateToken`: отслеживают изменения configured HP paths и запускают debounced auto activation.
+- `ready`: применяет выбранный системный HP preset, регистрирует socket handlers, повторно выставляет API, для GM принудительно ставит core `dynamicTokenRingScaling` в `grid`, добавляет `globalThis.MultiTokenArtDebug`, для активного GM показывает first-run выбор системы.
+- `updateActor` и `updateToken`: отслеживают изменения configured HP paths и запускают debounced auto activation; `updateToken` также ловит немодульные `texture.src` изменения, чтобы временно блокировать автосмену при Foundry-превращениях/маскировке.
 - `createActiveEffect`, `updateActiveEffect`, `deleteActiveEffect`: запускают auto activation при изменении статусов/эффектов.
+- `createItem`, `updateItem`, `deleteItem`: в PF2e запускают auto activation при изменении embedded condition items.
 - `createToken`: выбирает начальные token/portrait images с учетом active/default/random состояния, применяет Dynamic Ring и запускает auto activation.
 - `renderActorSheet`: подменяет видимый портрет sheet на token-specific active portrait.
 
@@ -88,6 +89,12 @@ Image entry shape:
 - `dynamicRing.ringColor`
 - `dynamicRing.backgroundColor`
 
+Открытые Active Effect атрибуты из `MTA_EFFECT_ATTRIBUTES`:
+
+- `mta.settoken`: 1-based номер token image в текущем отсортированном визуальном порядке.
+- `mta.setportrait`: 1-based номер portrait image в текущем отсортированном визуальном порядке.
+- Значения читаются из active effect `changes[].value`; mode Foundry не важен, для пользователя подходит `custom`.
+
 Token flag keys из `TOKEN_FLAG_KEYS`:
 
 - `activeTokenImageId`
@@ -95,6 +102,9 @@ Token flag keys из `TOKEN_FLAG_KEYS`:
 - `originalRing`
 - `originalRotation`
 - `lastUpdate`
+- `managedTokenImageSrc`
+- `externalTokenImageSrc`
+- `preExternalTokenImageId`
 
 Дополнительные token flags, используемые напрямую:
 
@@ -161,11 +171,13 @@ Default image:
 Основные файлы:
 
 - `scripts/logic/AutoActivation.mjs`
+- `scripts/system-support.mjs`
 - `scripts/utils/hp-resolver.mjs`
 - `scripts/settings.mjs`
 
 Priority order в `findBestImageForHp()`:
 
+0. Active Effect override: `mta.settoken` / `mta.setportrait` выбирают конкретный image по 1-based номеру.
 1. Dead image: `HP <= 0` и `autoEnable.die`.
 2. Status image: `autoEnable.status` совпадает с активным статусом/эффектом.
 3. Wounded image: HP percent ниже configured threshold; более строгий threshold побеждает.
@@ -179,18 +191,37 @@ Status matching учитывает:
 - effect `label`
 - effect `statusId`
 - effect `slug`
+- effect/item `system.slug`
+- effect/item `flags.core.statusId`
 - `statuses` как Set/Array/nested field
 - token effects
+- `tokenDoc.statuses`
 - `tokenDoc.hasStatusEffect(id)`, если доступен
+- PF2e condition items из `actor.itemTypes.condition`, `actor.items` и `actor.conditions`
+
+Status matching нормализует значения перед сравнением: case-insensitive, пробелы/underscore/hyphen приводятся к slug-like форме. Это позволяет PF2e slug values вроде `off-guard` совпадать с сохраненными label-like значениями.
 
 `applyTokenImageById()`:
 
 - обновляет `texture.src`, `texture.scaleX`, `texture.scaleY`;
-- пишет `activeTokenImageId`, `preConditionImageId`, `lastUpdate`;
+- пишет `activeTokenImageId`, `managedTokenImageSrc`, `preConditionImageId`, `lastUpdate` и очищает внешние override-флаги;
 - добавляет Dynamic Ring payload или disable-ring payload;
 - refresh-ит token object;
 - для linked token синхронизирует actor `prototypeToken` и actor-level active token flag;
 - при включенном `linkTokenPortrait` применяет связанный portrait.
+
+Внешние изменения token image:
+
+- Немодульный `updateToken` с изменением `texture.src` вызывает `handleExternalTokenImageChange()`.
+- Если новый `texture.src` не совпадает с `managedTokenImageSrc` и не найден в `tokenImages`, на токене пишется `externalTokenImageSrc`; пока текущий `texture.src` совпадает с этим флагом, `runAutoActivation()` пропускает автосмену token image.
+- При сбросе Foundry-превращения/маскировки к `managedTokenImageSrc` или любому известному `tokenImages[].src` внешние override-флаги очищаются, после чего force activation с игнорированием manual persistence заново применяет подходящий HP/status/default token image со scale, Dynamic Ring и связанными параметрами.
+- При включенном `linkTokenPortrait` связанный portrait не двигается от token image, если token image заблокирован внешним override.
+
+Active Effect override behavior:
+
+- Активные эффекты на actor с `changes[].key = "mta.settoken"` или `"mta.setportrait"` имеют приоритет над HP/status/manual persistence.
+- Если несколько активных эффектов задают один атрибут, побеждает последний найденный change при обходе `actor.effects`.
+- При создании/обновлении/удалении эффекта с MTA-атрибутами используется force activation с игнорированием manual persistence, чтобы при отключении эффекта токен/портрет вернулись к текущему HP/status/default расчету.
 
 `applyPortraitById()`:
 
@@ -288,10 +319,13 @@ Persistence generated token:
 Основные файлы:
 
 - `scripts/settings.mjs`
+- `scripts/system-support.mjs`
 - `scripts/utils/hp-resolver.mjs`
 
 World settings:
 
+- `systemMode`
+- `systemPrompted`
 - `hpCurrentPath`
 - `hpMaxPath`
 
@@ -306,7 +340,11 @@ System presets:
 - `pf2e`: `system.attributes.hp.value` / `system.attributes.hp.max`
 - `wfrp4e`: `system.status.wounds.value` / `system.status.wounds.max`
 
-`applySystemPresetIfNeeded()` меняет настройки только если обе HP paths все еще равны default values.
+`systemMode` поддерживает `auto`, `dnd5e`, `pf2e`, `wfrp4e`, `custom`. `auto` использует `game.system.id`, если он есть среди поддержанных presets. `custom` не применяет HP preset и оставляет ручные paths.
+
+`applySystemPresetIfNeeded()` меняет настройки только если обе HP paths все еще равны default values, кроме случаев явной смены `systemMode` или first-run выбора, где preset применяется принудительно.
+
+При первом запуске активный GM видит окно выбора системы. Подтверждение пишет `systemMode`, применяет HP preset и ставит `systemPrompted = true`.
 
 `resolveHpData(actor)` возвращает:
 
@@ -340,7 +378,8 @@ Files:
 - `Project-resume.md`: продуктовая документация на русском.
 - `scripts/module.mjs`: entrypoint, hooks, public API, automation scheduling.
 - `scripts/constants.mjs`: module id, setting keys, image types, status constants, token flag keys.
-- `scripts/settings.mjs`: world settings и system presets для HP paths.
+- `scripts/settings.mjs`: world settings, first-run system dialog и применение HP presets.
+- `scripts/system-support.mjs`: system mode presets, HP paths, status option lists, PF2e condition extraction и normalized status matching.
 - `scripts/data/ModuleData.mjs`: root actor flag DataModel.
 - `scripts/data/ImageData.mjs`: DataModel для одного image entry.
 - `scripts/utils/flag-utils.mjs`: чтение, sanitize и запись actor/token flags.

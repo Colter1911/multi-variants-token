@@ -72,5 +72,19 @@
     "MTA.ManualFrameScaleLabel": "Масштаб рамки",
     "MTA.ManualFrameReset": "Сбросить позицию",
     "MTA.ManualFrameRemoveWhiteBg": "Убрать белый фон",
-    "MTA.ManualFrameDragHint": "Перетащите рамку в зоне превью для смены позиции."
+    "MTA.ManualFrameDragHint": "Перетащите рамку в зоне превью для смены позиции.",
+    "MTA.SystemModeSettingName": "Игровая система",
+    "MTA.SystemModeSettingHint": "Выберите систему, которую Multi Token Art использует для автоматизации HP и состояний.",
+    "MTA.SystemModeAuto": "Авто (определить систему)",
+    "MTA.SystemModeDnd5e": "D&D 5e",
+    "MTA.SystemModePf2e": "Pathfinder 2e",
+    "MTA.SystemModeWfrp4e": "Warhammer Fantasy 4e",
+    "MTA.SystemModeCustom": "Свои пути HP",
+    "MTA.HpCurrentPathSettingName": "MTA путь текущих HP",
+    "MTA.HpCurrentPathSettingHint": "Путь к текущему значению HP в system data актора.",
+    "MTA.HpMaxPathSettingName": "MTA путь максимальных HP",
+    "MTA.HpMaxPathSettingHint": "Путь к максимальному значению HP в system data актора.",
+    "MTA.FirstRunSystemDialogTitle": "Настройка Multi Token Art",
+    "MTA.FirstRunSystemDialogContent": "Выберите игровую систему, которую Multi Token Art будет использовать для автоматизации HP и состояний. Позже это можно изменить в настройках модуля.",
+    "MTA.FirstRunSystemDialogConfirm": "Применить"
 }
