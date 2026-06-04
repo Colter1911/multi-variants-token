@@ -47,7 +47,92 @@ function sanitizeColor(value, fallback) {
   return HEX_COLOR_REGEX.test(normalized) ? normalized : fallback;
 }
 
-function sanitizeImageList(rawList) {
+function sanitizeManualToken(rawManualToken) {
+  const manualToken = asPlainObject(rawManualToken);
+  const source = asPlainObject(manualToken.source);
+  const selection = asPlainObject(manualToken.selection);
+
+  const sourceSrc = typeof source.src === "string" ? source.src.trim() : "";
+  const naturalWidth = toNumber(source.naturalWidth, 0);
+  const naturalHeight = toNumber(source.naturalHeight, 0);
+  const centerX = toNumber(selection.centerX, NaN);
+  const centerY = toNumber(selection.centerY, NaN);
+  const cropSize = toNumber(selection.cropSize, NaN);
+
+  if (!sourceSrc || naturalWidth <= 0 || naturalHeight <= 0) return null;
+  if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !Number.isFinite(cropSize) || cropSize <= 0) return null;
+
+  const sanitizePoint = (point) => {
+    const sourcePoint = asPlainObject(point);
+    const x = toNumber(sourcePoint.x, NaN);
+    const y = toNumber(sourcePoint.y, NaN);
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  };
+
+  const alphaPolygons = Array.isArray(manualToken.alphaPolygons)
+    ? manualToken.alphaPolygons
+        .map((entry) => {
+          const polygon = asPlainObject(entry);
+          const points = Array.isArray(polygon.points) ? polygon.points.map(sanitizePoint).filter(Boolean) : [];
+          if (points.length < 3) return null;
+          return {
+            operation: polygon.operation === "subtract" ? "subtract" : "add",
+            points
+          };
+        })
+        .filter(Boolean)
+    : [];
+
+  const stageView = asPlainObject(manualToken.stageView);
+  const customFrame = asPlainObject(manualToken.customFrame);
+  const render = asPlainObject(manualToken.render);
+  const customFrameEnabled = toBoolean(customFrame.enabled, false);
+  const frameSrc = typeof customFrame.src === "string" ? customFrame.src.trim() : "";
+
+  return {
+    version: Math.max(1, toInteger(manualToken.version, 1)),
+    source: {
+      src: sourceSrc,
+      originalSrc: typeof source.originalSrc === "string" ? source.originalSrc.trim() : "",
+      imageType: source.imageType === "portrait" ? "portrait" : "token",
+      imageId: typeof source.imageId === "string" && source.imageId.trim() ? source.imageId.trim() : null,
+      naturalWidth,
+      naturalHeight
+    },
+    selection: {
+      centerX,
+      centerY,
+      cropSize
+    },
+    alphaPolygons,
+    previewZoom: clamp(toNumber(manualToken.previewZoom, 1), 0.05, 100),
+    stageView: {
+      zoom: clamp(toNumber(stageView.zoom, 1), 0.05, 100),
+      panX: toNumber(stageView.panX, 0),
+      panY: toNumber(stageView.panY, 0)
+    },
+    customFrame: {
+      enabled: customFrameEnabled && !!frameSrc,
+      src: frameSrc,
+      originalSrc: typeof customFrame.originalSrc === "string" ? customFrame.originalSrc.trim() : "",
+      removeWhiteBg: toBoolean(customFrame.removeWhiteBg, false),
+      offsetX: toNumber(customFrame.offsetX, 0),
+      offsetY: toNumber(customFrame.offsetY, 0),
+      scale: clamp(toNumber(customFrame.scale, 1), 0.05, 100)
+    },
+    render: {
+      customFrameEnabled: toBoolean(render.customFrameEnabled, customFrameEnabled && !!frameSrc),
+      textureScale: clamp(toNumber(render.textureScale, 1), 0.05, 100),
+      canvasSize: render.canvasSize === null || render.canvasSize === undefined ? null : Math.max(1, toInteger(render.canvasSize, 512)),
+      compositionScale: clamp(toNumber(render.compositionScale, 1), 0.05, 100),
+      allowOverflowCanvas: toBoolean(render.allowOverflowCanvas, true),
+      centerOverflowCanvas: toBoolean(render.centerOverflowCanvas, true),
+      maskMode: render.maskMode === "base" || render.maskMode === "additions" ? render.maskMode : "full"
+    }
+  };
+}
+
+function sanitizeImageList(rawList, { allowManualToken = false } = {}) {
   if (!Array.isArray(rawList)) return [];
 
   const indexedList = rawList
@@ -87,7 +172,7 @@ function sanitizeImageList(rawList) {
     const autoEnable = asPlainObject(image.autoEnable);
     const dynamicRing = asPlainObject(image.dynamicRing);
 
-    result.push({
+    const sanitizedImage = {
       id,
       src,
       scaleX: toNumber(image.scaleX, 1),
@@ -106,9 +191,18 @@ function sanitizeImageList(rawList) {
         enabled: toBoolean(dynamicRing.enabled, false),
         scaleCorrection: toNumber(dynamicRing.scaleCorrection, 1),
         ringColor: sanitizeColor(dynamicRing.ringColor, "#ffffff"),
-        backgroundColor: sanitizeColor(dynamicRing.backgroundColor, "#000000")
+        backgroundColor: sanitizeColor(dynamicRing.backgroundColor, "#000000"),
+        texture: typeof dynamicRing.texture === "string" && dynamicRing.texture.trim() ? dynamicRing.texture.trim() : null,
+        subjectScaleCorrection: clamp(toNumber(dynamicRing.subjectScaleCorrection, 1), 0.05, 100)
       }
-    });
+    };
+
+    if (allowManualToken) {
+      const manualToken = sanitizeManualToken(image.manualToken);
+      if (manualToken) sanitizedImage.manualToken = manualToken;
+    }
+
+    result.push(sanitizedImage);
   }
 
   if (result.length > 0) {
@@ -143,7 +237,7 @@ function sanitizeModuleData(rawData) {
       portraitRandom: toBoolean(global.portraitRandom, DEFAULT_MODULE_DATA.global.portraitRandom),
       linkTokenPortrait: toBoolean(global.linkTokenPortrait, DEFAULT_MODULE_DATA.global.linkTokenPortrait)
     },
-    tokenImages: sanitizeImageList(source.tokenImages),
+    tokenImages: sanitizeImageList(source.tokenImages, { allowManualToken: true }),
     portraitImages: sanitizeImageList(source.portraitImages)
   };
 }

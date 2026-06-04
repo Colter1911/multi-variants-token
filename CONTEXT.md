@@ -88,6 +88,21 @@ Image entry shape:
 - `dynamicRing.scaleCorrection`
 - `dynamicRing.ringColor`
 - `dynamicRing.backgroundColor`
+- `dynamicRing.texture` optional explicit Foundry Dynamic Ring subject texture.
+- `dynamicRing.subjectScaleCorrection` reserved hidden field; current Dynamic Ring scale remains driven only by user `scaleCorrection`.
+- `manualToken` (optional, token images only): metadata for editable manual-token outputs.
+
+`manualToken` metadata stores:
+
+- `version`
+- `source.src` durable cached full source path
+- `source.originalSrc`, `source.imageType`, `source.imageId`, `source.naturalWidth`, `source.naturalHeight`
+- `selection.centerX`, `selection.centerY`, `selection.cropSize`
+- `alphaPolygons[]` with `operation` (`add`/`subtract`) and source-coordinate `points[]`
+- `previewZoom`
+- `stageView.zoom`, `stageView.panX`, `stageView.panY`
+- `customFrame.enabled`, `customFrame.src`, `customFrame.originalSrc`, `customFrame.removeWhiteBg`, `customFrame.offsetX`, `customFrame.offsetY`, `customFrame.scale`
+- `render.customFrameEnabled`, `render.textureScale`, `render.canvasSize`, `render.compositionScale`, `render.allowOverflowCanvas`, `render.centerOverflowCanvas`, `render.maskMode`
 
 Открытые Active Effect атрибуты из `MTA_EFFECT_ATTRIBUTES`:
 
@@ -291,7 +306,11 @@ Manual generation:
 - Preview создается через `createTokenCanvasFromSelection()`.
 - Финальный WebP создается через `createTokenBlobFromSelection()`.
 - Для custom frame используется larger canvas behavior (`1024`) и overflow-aware metadata.
-- Custom-frame outputs отключают Dynamic Ring и сохраняют `textureScale` из render metadata, чтобы итоговый token scale совпадал с preview.
+- Dynamic Ring manual outputs без custom frame используют один overflow-aware WebP как token texture. Adaptive canvas компенсируется через token `texture.scaleX/Y`, чтобы базовый круг визуально оставался scale `1`; `dynamicRing.texture` остается `null`, Foundry использует token texture как subject, а пользовательский `dynamicRing.scaleCorrection` остается `1`.
+- Custom-frame outputs отключают Dynamic Ring и сохраняют `textureScale` из render metadata в token texture scale, чтобы итоговый token scale совпадал с preview.
+- При сохранении manual generation записывает `manualToken` metadata на итоговый token image. Полный source и custom frame cache-ятся через `uploadFileToActorFolder()` для `blob:`/`data:`/remote sources, чтобы edit mode не зависел от временных object URL.
+- Уже созданный manual token с metadata можно открыть из token settings через edit action. Dialog восстанавливает исходную полную картинку, фиксированный crop, preview zoom, stage pan/zoom, applied alpha polygons и custom frame state, затем сохраняет результат в тот же token image.
+- Старые generated tokens без `manualToken` metadata не имеют полного source/alpha history; edit button для них не показывается.
 
 Persistence generated token:
 
@@ -299,6 +318,7 @@ Persistence generated token:
 - Upload идет через `uploadFileToActorFolder()`.
 - Если source был portrait image, создается новый token image на соответствующей позиции.
 - Если source был token image, текущий token image заменяет `src`.
+- Manual persistence сохраняет/обновляет `manualToken`; auto generation очищает stale `manualToken` при замене token image.
 - После сохранения вызывается `applyTokenImageById()`, чтобы применить созданный token immediately.
 
 ## Файлы, загрузки и socket

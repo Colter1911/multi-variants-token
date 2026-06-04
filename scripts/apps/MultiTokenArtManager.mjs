@@ -96,7 +96,9 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         enabled: ringData.enabled ?? false,
         scaleCorrection: 1, // Default to 1 as requested previously
         ringColor: ringData.colors?.ring ? Color.from(ringData.colors.ring).toString() : "#ffffff",
-        backgroundColor: ringData.colors?.background ? Color.from(ringData.colors.background).toString() : "#000000"
+        backgroundColor: ringData.colors?.background ? Color.from(ringData.colors.background).toString() : "#000000",
+        texture: null,
+        subjectScaleCorrection: 1
       };
 
       data.tokenImages = [{
@@ -121,7 +123,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         isDefault: true,
         autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false, status: "" },
         customScript: "",
-        dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#ffffff", backgroundColor: "#000000" }
+        dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#ffffff", backgroundColor: "#000000", texture: null, subjectScaleCorrection: 1 }
       }];
       changed = true;
     }
@@ -225,6 +227,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           imageType,
           index,
           isToken: imageType === IMAGE_TYPES.TOKEN,
+          canEditManualToken: imageType === IMAGE_TYPES.TOKEN && !!image.manualToken,
           randomEnabled: imageType === IMAGE_TYPES.TOKEN ? data.global.tokenRandom : data.global.portraitRandom
         };
       } else {
@@ -278,6 +281,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           else if (action === "browse-file") await this.#onBrowseFile(event);
           else if (action === "create-token") await this.#onCreateToken(event);
           else if (action === "create-manual-token") await this.#onCreateManualToken(event);
+          else if (action === "edit-manual-token") await this.#onEditManualToken(event);
         }
       });
     });
@@ -744,7 +748,9 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         enabled: false,
         scaleCorrection: 1,
         ringColor: "#ffffff",
-        backgroundColor: "#000000"
+        backgroundColor: "#000000",
+        texture: null,
+        subjectScaleCorrection: 1
       }
     };
 
@@ -855,18 +861,26 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     const image = list[index];
     const previousSrc = image.src;
+    const preservedDynamicRingTexture = previousSrc === src ? (image.dynamicRing?.texture ?? null) : null;
+    const preservedDynamicRingSubjectScale = previousSrc === src ? (image.dynamicRing?.subjectScaleCorrection ?? 1) : 1;
     image.src = src;
     image.scaleX = Number(panel.querySelector("[name='scaleX']")?.value ?? 1);
     image.scaleY = Number(panel.querySelector("[name='scaleY']")?.value ?? 1);
     image.isDefault = isDefault;
     image.autoEnable = autoEnable;
 
+    if (imageType === IMAGE_TYPES.TOKEN && previousSrc !== src) {
+      delete image.manualToken;
+    }
+
     if (imageType === IMAGE_TYPES.TOKEN) {
       image.dynamicRing = {
         enabled: panel.querySelector("[name='dynamicRing.enabled']").checked,
         scaleCorrection: Number(panel.querySelector("[name='dynamicRing.scaleCorrection']").value),
         ringColor: panel.querySelector("[name='dynamicRing.ringColor']").value,
-        backgroundColor: panel.querySelector("[name='dynamicRing.backgroundColor']").value
+        backgroundColor: panel.querySelector("[name='dynamicRing.backgroundColor']").value,
+        texture: preservedDynamicRingTexture,
+        subjectScaleCorrection: preservedDynamicRingSubjectScale
       };
     }
 
@@ -1070,7 +1084,160 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       return null;
     }
 
-    return { index, imageType, src };
+    return { index, imageType, src, image };
+  }
+
+  #isEphemeralManualAssetSource(src) {
+    return typeof src === "string" && /^(blob|data):/i.test(src.trim());
+  }
+
+  #shouldCacheManualAssetSource(src) {
+    return typeof src === "string" && /^(blob|data|https?):/i.test(src.trim());
+  }
+
+  #getManualAssetExtension(blob) {
+    const mimeExt = String(blob?.type ?? "").split("/")[1]?.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    if (!mimeExt) return "png";
+    if (mimeExt === "jpeg") return "jpg";
+    if (mimeExt === "svgxml") return "svg";
+    return mimeExt;
+  }
+
+  async #cacheManualAssetSource(src, { role = "source", fallbackName = "manual-asset" } = {}) {
+    const originalSrc = String(src ?? "").trim();
+    if (!originalSrc) return "";
+    if (!this.#shouldCacheManualAssetSource(originalSrc)) return originalSrc;
+
+    try {
+      const response = await fetch(originalSrc);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      const ext = this.#getManualAssetExtension(blob);
+      const safeBaseName = String(fallbackName || role || "manual-asset").slugify({ strict: true }) || "manual-asset";
+      const safeRole = String(role || "asset").slugify({ strict: true }) || "asset";
+      const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+      const nonce = (foundry.utils.randomID?.() ?? Math.random().toString(36).slice(2, 10)).slice(0, 8);
+      const file = new File([blob], `${safeBaseName}_${safeRole}_${stamp}_${nonce}.${ext}`, {
+        type: blob.type || "image/png"
+      });
+      const uploadedPath = await uploadFileToActorFolder(file, this.actor, { notifyOnError: false });
+      if (!uploadedPath) throw new Error("upload failed");
+      return uploadedPath;
+    } catch (err) {
+      console.error("[MTA ManualToken] Failed to cache editable asset:", { src: originalSrc, role, err });
+      if (this.#isEphemeralManualAssetSource(originalSrc)) {
+        throw new Error(game.i18n.localize("MTA.ManualTokenCacheFailed"));
+      }
+      ui.notifications.warn(game.i18n.localize("MTA.ManualTokenCacheFailed"));
+      return originalSrc;
+    }
+  }
+
+  #cloneManualSelection(selection) {
+    const centerX = Number(selection?.centerX);
+    const centerY = Number(selection?.centerY);
+    const cropSize = Number(selection?.cropSize);
+    if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !Number.isFinite(cropSize) || cropSize <= 0) return null;
+    return { centerX, centerY, cropSize };
+  }
+
+  #cloneManualAlphaPolygons(polygons) {
+    if (!Array.isArray(polygons)) return [];
+    return polygons
+      .map((entry) => {
+        const points = Array.isArray(entry?.points) ? entry.points : (Array.isArray(entry) ? entry : []);
+        const clonedPoints = points
+          .map((point) => {
+            const x = Number(point?.x);
+            const y = Number(point?.y);
+            return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+          })
+          .filter(Boolean);
+        if (clonedPoints.length < 3) return null;
+        return {
+          operation: entry?.operation === "subtract" ? "subtract" : "add",
+          points: clonedPoints
+        };
+      })
+      .filter(Boolean);
+  }
+
+  #buildManualTokenMetadata(state, renderMetadata, cachedAssets = {}) {
+    const selection = this.#cloneManualSelection(state.selection);
+    if (!selection) return null;
+
+    const imageWidth = state.image?.naturalWidth || state.image?.width || 0;
+    const imageHeight = state.image?.naturalHeight || state.image?.height || 0;
+    if (imageWidth <= 0 || imageHeight <= 0) return null;
+
+    const source = state.manualTokenSource?.source ?? {};
+    const customFrameEnabled = Boolean(state.customFrame?.enabled && state.customFrame?.image);
+    const frameSrc = customFrameEnabled ? String(cachedAssets.frameSrc ?? state.customFrame?.src ?? "").trim() : "";
+
+    return {
+      version: 1,
+      source: {
+        src: String(cachedAssets.sourceSrc ?? state.src ?? "").trim(),
+        originalSrc: String(source.originalSrc ?? state.src ?? "").trim(),
+        imageType: source.imageType === IMAGE_TYPES.PORTRAIT || state.sourceImageType === IMAGE_TYPES.PORTRAIT ? IMAGE_TYPES.PORTRAIT : IMAGE_TYPES.TOKEN,
+        imageId: typeof source.imageId === "string" ? source.imageId : (state.sourceImageId ?? null),
+        naturalWidth: imageWidth,
+        naturalHeight: imageHeight
+      },
+      selection,
+      alphaPolygons: this.#cloneManualAlphaPolygons(state.alphaAppliedPolygons),
+      previewZoom: this.#clampNumber(
+        Number.isFinite(state.previewZoom) ? state.previewZoom : MANUAL_PREVIEW_ZOOM_LIMITS.default,
+        state.previewZoomMin ?? MANUAL_PREVIEW_ZOOM_LIMITS.min,
+        state.previewZoomMax ?? MANUAL_PREVIEW_ZOOM_LIMITS.max
+      ),
+      stageView: {
+        zoom: this.#clampNumber(Number.isFinite(state.zoom) ? state.zoom : 1, state.zoomMin, state.zoomMax),
+        panX: Number.isFinite(state.panX) ? state.panX : 0,
+        panY: Number.isFinite(state.panY) ? state.panY : 0
+      },
+      customFrame: {
+        enabled: customFrameEnabled && !!frameSrc,
+        src: frameSrc,
+        originalSrc: String(state.manualTokenSource?.customFrame?.originalSrc ?? state.customFrame?.src ?? "").trim(),
+        removeWhiteBg: Boolean(state.customFrame?.removeWhiteBg),
+        offsetX: Number.isFinite(state.customFrame?.offsetX) ? state.customFrame.offsetX : 0,
+        offsetY: Number.isFinite(state.customFrame?.offsetY) ? state.customFrame.offsetY : 0,
+        scale: this.#clampNumber(
+          Number.isFinite(state.customFrame?.scale) ? state.customFrame.scale : MANUAL_FRAME_SCALE_LIMITS.default,
+          MANUAL_FRAME_SCALE_LIMITS.min,
+          MANUAL_FRAME_SCALE_LIMITS.max
+        )
+      },
+      render: {
+        customFrameEnabled,
+        textureScale: this.#clampNumber(Number(renderMetadata?.textureScale ?? 1), 0.05, 100),
+        canvasSize: customFrameEnabled ? MANUAL_CUSTOM_FRAME_CANVAS_SIZE : null,
+        compositionScale: this.#clampNumber(Number(renderMetadata?.compositionScale ?? state.previewZoom ?? 1), 0.05, 100),
+        allowOverflowCanvas: true,
+        centerOverflowCanvas: !customFrameEnabled,
+        maskMode: "full"
+      }
+    };
+  }
+
+  #removeWhiteBackground(img) {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    const tmpCanvas = document.createElement("canvas");
+    tmpCanvas.width = w;
+    tmpCanvas.height = h;
+    const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true });
+    tmpCtx.drawImage(img, 0, 0, w, h);
+    const imgData = tmpCtx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] >= 250 && data[i + 1] >= 250 && data[i + 2] >= 250) {
+        data[i + 3] = 0;
+      }
+    }
+    tmpCtx.putImageData(imgData, 0, 0);
+    return tmpCanvas;
   }
 
   #buildGeneratedTokenFile(blob, src, { generationMode = "auto" } = {}) {
@@ -1089,7 +1256,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     return new File([blob], fileName, { type: "image/webp" });
   }
 
-  async #persistGeneratedTokenBlob({ blob, src, imageType, index, generationMode = "auto", customFrameEnabled = false, textureScale = 1 }) {
+  async #persistGeneratedTokenBlob({ blob, src, imageType, index, generationMode = "auto", customFrameEnabled = false, textureScale = 1, manualTokenMetadata = null }) {
     if (!blob) {
       return null;
     }
@@ -1099,6 +1266,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     if (!uploadedPath) {
       return null;
     }
+
+    const useManualDynamicRingOverflow = generationMode === "manual" && !customFrameEnabled;
 
     const data = getActorModuleData(this.actor);
     let targetTokenImage = null;
@@ -1118,7 +1287,9 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       const insertIndex = Math.min(Math.max(0, index), tokenList.length);
       const tokenImage = this.#buildGeneratedTokenImage(uploadedPath, insertIndex, {
         customFrameEnabled,
-        textureScale: safeTextureScale
+        textureScale: safeTextureScale,
+        manualTokenMetadata: generationMode === "manual" ? manualTokenMetadata : null,
+        useManualDynamicRingOverflow
       });
       tokenList.splice(insertIndex, 0, tokenImage);
       tokenList.forEach((tokenImageEntry, tokenIndex) => {
@@ -1137,19 +1308,32 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       if (!tokenImage) {
         return null;
       }
+      const baseScaleX = this.#resolveTokenImageBaseTextureScale(tokenImage, "scaleX");
+      const baseScaleY = this.#resolveTokenImageBaseTextureScale(tokenImage, "scaleY");
       tokenImage.src = uploadedPath;
+      if (generationMode === "manual" && manualTokenMetadata) {
+        tokenImage.manualToken = manualTokenMetadata;
+      } else {
+        delete tokenImage.manualToken;
+      }
       if (customFrameEnabled) {
         tokenImage.scaleX = safeTextureScale;
         tokenImage.scaleY = safeTextureScale;
+      } else if (useManualDynamicRingOverflow) {
+        tokenImage.scaleX = baseScaleX * safeTextureScale;
+        tokenImage.scaleY = baseScaleY * safeTextureScale;
       }
       targetTokenImage = tokenImage;
     }
 
+    const currentDynamicRing = targetTokenImage.dynamicRing ?? {};
     targetTokenImage.dynamicRing = {
       enabled: !customFrameEnabled,
       scaleCorrection: 1,
-      ringColor: "#ffffff",
-      backgroundColor: "#000000"
+      ringColor: currentDynamicRing.ringColor ?? "#ffffff",
+      backgroundColor: currentDynamicRing.backgroundColor ?? "#000000",
+      texture: null,
+      subjectScaleCorrection: 1
     };
 
     await setActorModuleData(this.actor, data);
@@ -1206,17 +1390,59 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const sourceContext = this.#resolveActiveImageSource();
     if (!sourceContext) return;
 
-    const { src, imageType, index } = sourceContext;
+    const { src, imageType, index, image: sourceImageEntry } = sourceContext;
 
     try {
       const image = await this.#loadImageElement(src);
-      await this.#openManualTokenDialog({ src, imageType, index, image });
+      await this.#openManualTokenDialog({ src, imageType, index, image, sourceImageEntry });
     } catch (err) {
       console.error("[MTA ManualToken] Ошибка открытия окна:", err);
     }
   }
 
-  async #openManualTokenDialog({ src, imageType, index, image }) {
+  async #onEditManualToken(event) {
+    if (!this.activeSettings) return;
+
+    const { index, imageType } = this.activeSettings;
+    if (imageType !== IMAGE_TYPES.TOKEN) return;
+
+    const data = getActorModuleData(this.actor);
+    const tokenList = data.tokenImages ?? [];
+    const tokenImage = tokenList[index];
+    const manualToken = tokenImage?.manualToken;
+    const sourceSrc = String(manualToken?.source?.src ?? "").trim();
+    const selection = this.#cloneManualSelection(manualToken?.selection);
+
+    if (!manualToken || !sourceSrc || !selection) {
+      ui.notifications.error(game.i18n.localize("MTA.ManualTokenMetadataInvalid"));
+      return;
+    }
+
+    try {
+      const image = await this.#loadImageElement(sourceSrc);
+      let initialFrameImage = null;
+      const frameSrc = String(manualToken.customFrame?.src ?? "").trim();
+      if (manualToken.customFrame?.enabled && frameSrc) {
+        initialFrameImage = await this.#loadImageElement(frameSrc);
+      }
+
+      await this.#openManualTokenDialog({
+        src: sourceSrc,
+        imageType: IMAGE_TYPES.TOKEN,
+        index,
+        image,
+        sourceImageEntry: tokenImage,
+        initialManualToken: manualToken,
+        initialFrameImage,
+        editMode: true
+      });
+    } catch (err) {
+      console.error("[MTA ManualToken] Ошибка открытия режима редактирования:", err);
+      ui.notifications.error(game.i18n.localize("MTA.ManualTokenSourceMissing"));
+    }
+  }
+
+  async #openManualTokenDialog({ src, imageType, index, image, sourceImageEntry = null, initialManualToken = null, initialFrameImage = null, editMode = false }) {
     this._manualTokenDialog?.close();
     this._manualTokenDialog = null;
 
@@ -1232,28 +1458,50 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const left = Math.max(8, Math.floor((viewportWidth - width) / 2));
     const top = Math.max(8, Math.floor((viewportHeight - height) / 2));
 
+    const restoredSelection = this.#cloneManualSelection(initialManualToken?.selection);
+    const restoredStageView = initialManualToken?.stageView ?? {};
+    const restoredFixedSource = restoredSelection
+      ? { x: restoredSelection.centerX, y: restoredSelection.centerY }
+      : null;
+    const restoredPreviewZoom = this.#clampNumber(
+      Number(initialManualToken?.previewZoom ?? MANUAL_PREVIEW_ZOOM_LIMITS.default),
+      MANUAL_PREVIEW_ZOOM_LIMITS.min,
+      MANUAL_PREVIEW_ZOOM_LIMITS.max
+    );
+    const restoredFrame = initialManualToken?.customFrame ?? {};
+    const restoredFrameEnabled = Boolean(restoredFrame.enabled && initialFrameImage);
+    const restoredFrameScale = this.#clampNumber(
+      Number(restoredFrame.scale ?? MANUAL_FRAME_SCALE_LIMITS.default),
+      MANUAL_FRAME_SCALE_LIMITS.min,
+      MANUAL_FRAME_SCALE_LIMITS.max
+    );
+
     const state = {
       src,
       imageType,
       index,
       image,
-      zoom: 1,
+      editMode: Boolean(editMode),
+      manualTokenSource: initialManualToken,
+      sourceImageType: initialManualToken?.source?.imageType ?? imageType,
+      sourceImageId: initialManualToken?.source?.imageId ?? sourceImageEntry?.id ?? null,
+      zoom: this.#clampNumber(Number(restoredStageView.zoom ?? 1), MANUAL_TOKEN_ZOOM_LIMITS.min, MANUAL_TOKEN_ZOOM_LIMITS.max),
       zoomMin: MANUAL_TOKEN_ZOOM_LIMITS.min,
       zoomMax: MANUAL_TOKEN_ZOOM_LIMITS.max,
-      previewZoom: MANUAL_PREVIEW_ZOOM_LIMITS.default,
+      previewZoom: restoredPreviewZoom,
       previewZoomMin: MANUAL_PREVIEW_ZOOM_LIMITS.min,
       previewZoomMax: MANUAL_PREVIEW_ZOOM_LIMITS.max,
-      panX: 0,
-      panY: 0,
+      panX: Number.isFinite(Number(restoredStageView.panX)) ? Number(restoredStageView.panX) : 0,
+      panY: Number.isFinite(Number(restoredStageView.panY)) ? Number(restoredStageView.panY) : 0,
       isPanning: false,
       panStart: null,
-      hoverSource: {
+      hoverSource: restoredFixedSource ?? {
         x: (image.naturalWidth || image.width) / 2,
         y: (image.naturalHeight || image.height) / 2
       },
-      fixedSource: null,
-      isFixed: false,
-      selection: null,
+      fixedSource: restoredFixedSource,
+      isFixed: !!restoredSelection,
+      selection: restoredSelection,
       metrics: null,
       stageCanvas: null,
       previewCanvas: null,
@@ -1268,26 +1516,26 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       alphaCurrentStroke: null,
       alphaCurrentStrokeMode: "add",
       alphaPendingPolygons: [],
-      alphaAppliedPolygons: [],
+      alphaAppliedPolygons: this.#cloneManualAlphaPolygons(initialManualToken?.alphaPolygons),
       alphaMaskVersion: 0,
-      alphaMaskAppliedVersion: -1,
+      alphaMaskAppliedVersion: initialManualToken?.alphaPolygons?.length ? 0 : -1,
       circleRadiusPx: 0,
       fixedCircleRadiusPx: null,
-      fixedSelection: null,
+      fixedSelection: restoredSelection,
       _stageSizeKey: "",
       cleanup: null,
       renderRafId: null,
       resizeObserver: null,
       initialRenderTimeout: null,
       customFrame: {
-        enabled: false,
-        src: null,
-        image: null,
-        rawImage: null,
-        removeWhiteBg: false,
-        offsetX: 0,
-        offsetY: 0,
-        scale: MANUAL_FRAME_SCALE_LIMITS.default,
+        enabled: restoredFrameEnabled,
+        src: restoredFrameEnabled ? String(restoredFrame.src ?? "") : null,
+        image: restoredFrameEnabled && restoredFrame.removeWhiteBg ? this.#removeWhiteBackground(initialFrameImage) : initialFrameImage,
+        rawImage: restoredFrameEnabled ? initialFrameImage : null,
+        removeWhiteBg: Boolean(restoredFrame.removeWhiteBg),
+        offsetX: Number.isFinite(Number(restoredFrame.offsetX)) ? Number(restoredFrame.offsetX) : 0,
+        offsetY: Number.isFinite(Number(restoredFrame.offsetY)) ? Number(restoredFrame.offsetY) : 0,
+        scale: restoredFrameScale,
         isDragging: false,
         dragStartX: 0,
         dragStartY: 0,
@@ -1300,8 +1548,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     };
 
     const dialog = new Dialog({
-      title: game.i18n.localize("MTA.ManualTokenDialogTitle"),
-      content: this.#buildManualTokenDialogContent(),
+      title: game.i18n.localize(editMode ? "MTA.ManualTokenEditDialogTitle" : "MTA.ManualTokenDialogTitle"),
+      content: this.#buildManualTokenDialogContent({ editMode }),
       buttons: {},
       render: (html) => {
         const root = this.#resolveDialogRoot(html, dialog);
@@ -1331,7 +1579,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     return document.querySelector(`.${MODULE_ID}.mta-manual-token-window`) ?? null;
   }
 
-  #buildManualTokenDialogContent() {
+  #buildManualTokenDialogContent({ editMode = false } = {}) {
     const previewTitle = game.i18n.localize("MTA.ManualTokenPreviewTitle");
     const alphaEditorTitle = game.i18n.localize("MTA.ManualAlphaEditorTitle");
     const drawToggleLabel = game.i18n.localize("MTA.ManualAlphaDrawToggle");
@@ -1339,7 +1587,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const undoAlphaLabel = game.i18n.localize("MTA.ManualAlphaUndo");
     const clearAlphaLabel = game.i18n.localize("MTA.ManualAlphaClear");
     const alphaStatusIdle = game.i18n.localize("MTA.ManualAlphaStatusIdle");
-    const createLabel = game.i18n.localize("MTA.CreateToken");
+    const createLabel = game.i18n.localize(editMode ? "MTA.ManualTokenSaveChanges" : "MTA.CreateToken");
     const cancelLabel = game.i18n.localize("MTA.Cancel");
     const hint = game.i18n.localize("MTA.ManualTokenHint");
     const previewZoomResetLabel = game.i18n.localize("MTA.ManualPreviewZoomReset");
@@ -1885,6 +2133,33 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         const customFrameConfig = state.customFrame?.enabled && state.customFrame?.image
           ? { image: state.customFrame.image, offsetX: state.customFrame.offsetX, offsetY: state.customFrame.offsetY, scale: state.customFrame.scale }
           : null;
+        const cachedAssets = {
+          sourceSrc: await this.#cacheManualAssetSource(state.src, {
+            role: "manual-source",
+            fallbackName: state.sourceImageId || "manual-token-source"
+          })
+        };
+        if (!cachedAssets.sourceSrc) {
+          ui.notifications.error(game.i18n.localize("MTA.ManualTokenCacheFailed"));
+          return;
+        }
+
+        if (customFrameConfig) {
+          const frameSrc = String(state.customFrame?.src ?? "").trim();
+          if (!frameSrc) {
+            ui.notifications.error(game.i18n.localize("MTA.ManualTokenCacheFailed"));
+            return;
+          }
+          cachedAssets.frameSrc = await this.#cacheManualAssetSource(frameSrc, {
+            role: "manual-frame",
+            fallbackName: state.sourceImageId || "manual-token-frame"
+          });
+          if (!cachedAssets.frameSrc) {
+            ui.notifications.error(game.i18n.localize("MTA.ManualTokenCacheFailed"));
+            return;
+          }
+        }
+
         const manualPreviewZoom = this.#clampNumber(
           Number.isFinite(state.previewZoom) ? state.previewZoom : MANUAL_PREVIEW_ZOOM_LIMITS.default,
           state.previewZoomMin ?? MANUAL_PREVIEW_ZOOM_LIMITS.min,
@@ -1899,8 +2174,15 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           customFrame: customFrameConfig,
           canvasSize: customFrameConfig ? MANUAL_CUSTOM_FRAME_CANVAS_SIZE : null,
           compositionScale: customFrameConfig ? manualPreviewZoom : 1,
-          allowOverflowCanvas: Boolean(customFrameConfig)
+          allowOverflowCanvas: true,
+          centerOverflowCanvas: !customFrameConfig,
+          maskMode: "full"
         });
+        const manualTokenMetadata = this.#buildManualTokenMetadata(state, renderMetadata, cachedAssets);
+        if (!manualTokenMetadata) {
+          ui.notifications.error(game.i18n.localize("MTA.ManualTokenMetadataInvalid"));
+          return;
+        }
 
         const saved = await this.#persistGeneratedTokenBlob({
           blob,
@@ -1909,7 +2191,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           index: state.index,
           generationMode: "manual",
           customFrameEnabled: Boolean(customFrameConfig),
-          textureScale: renderMetadata?.textureScale ?? 1
+          textureScale: renderMetadata?.textureScale ?? 1,
+          manualTokenMetadata
         });
 
         if (!saved) return;
@@ -1978,28 +2261,28 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       frameThumbWrap?.classList.remove("hidden");
     };
 
-    const removeWhiteBackground = (img) => {
-      const w = img.naturalWidth || img.width;
-      const h = img.naturalHeight || img.height;
-      const tmpCanvas = document.createElement("canvas");
-      tmpCanvas.width = w;
-      tmpCanvas.height = h;
-      const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true });
-      tmpCtx.drawImage(img, 0, 0, w, h);
-      const imgData = tmpCtx.getImageData(0, 0, w, h);
-      const data = imgData.data;
-      for (let i = 0; i < data.length; i += 4) {
-        if (data[i] >= 250 && data[i + 1] >= 250 && data[i + 2] >= 250) {
-          data[i + 3] = 0;
-        }
+    const syncInitialFrameUi = () => {
+      const frameEnabled = Boolean(state.customFrame.enabled);
+      if (frameCheckbox) frameCheckbox.checked = frameEnabled;
+      if (frameRemoveWhiteBgCheckbox) frameRemoveWhiteBgCheckbox.checked = Boolean(state.customFrame.removeWhiteBg);
+      frameBody?.classList.toggle("hidden", !frameEnabled);
+
+      if (state.customFrame.image && state.customFrame.src) {
+        if (frameThumbImg) frameThumbImg.src = state.customFrame.src;
+        showFrameAdjustments();
+      } else {
+        frameAdjustments?.classList.add("hidden");
+        frameThumbWrap?.classList.add("hidden");
       }
-      tmpCtx.putImageData(imgData, 0, 0);
-      return tmpCanvas;
+
+      syncFrameScaleUi();
     };
+
+    syncInitialFrameUi();
 
     const applyFrameImage = (img, src) => {
       state.customFrame.rawImage = img;
-      state.customFrame.image = state.customFrame.removeWhiteBg ? removeWhiteBackground(img) : img;
+      state.customFrame.image = state.customFrame.removeWhiteBg ? this.#removeWhiteBackground(img) : img;
       state.customFrame.src = src;
       state.customFrame.offsetX = 0;
       state.customFrame.offsetY = 0;
@@ -2121,7 +2404,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       state.customFrame.removeWhiteBg = frameRemoveWhiteBgCheckbox?.checked ?? false;
       if (state.customFrame.rawImage) {
         state.customFrame.image = state.customFrame.removeWhiteBg
-          ? removeWhiteBackground(state.customFrame.rawImage)
+          ? this.#removeWhiteBackground(state.customFrame.rawImage)
           : state.customFrame.rawImage;
         schedulePreviewRefresh();
       }
@@ -2261,6 +2544,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       if (frameBrowseBtn) frameBrowseBtn.removeEventListener("click", onFrameBrowse);
       if (frameScaleRange) frameScaleRange.removeEventListener("input", onFrameScaleInput);
       if (frameResetBtn) frameResetBtn.removeEventListener("click", onFrameReset);
+      if (frameRemoveWhiteBgCheckbox) frameRemoveWhiteBgCheckbox.removeEventListener("change", onFrameRemoveWhiteBg);
       if (previewZoomResetBtn) previewZoomResetBtn.removeEventListener("click", onPreviewZoomReset);
       previewCanvas.removeEventListener("mousedown", onPreviewMouseDown);
       previewCanvas.removeEventListener("wheel", onPreviewWheel);
@@ -2302,7 +2586,25 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
   }
 
   #clampNumber(value, min, max) {
-    return Math.min(max, Math.max(min, value));
+    const numeric = Number(value);
+    const fallback = Number.isFinite(min) ? min : 0;
+    if (!Number.isFinite(numeric)) return fallback;
+    return Math.min(max, Math.max(min, numeric));
+  }
+
+  #resolveTokenImageBaseTextureScale(image, axis) {
+    const fallback = axis === "scaleY"
+      ? (this.actor?.prototypeToken?.texture?.scaleY ?? 1)
+      : (this.actor?.prototypeToken?.texture?.scaleX ?? 1);
+    const current = Number(image?.[axis]);
+    const safeCurrent = Number.isFinite(current) ? current : fallback;
+    const previousTextureScale = Number(image?.manualToken?.render?.textureScale);
+
+    if (Number.isFinite(previousTextureScale) && previousTextureScale > 0 && !image?.manualToken?.render?.customFrameEnabled) {
+      return safeCurrent / previousTextureScale;
+    }
+
+    return safeCurrent;
   }
 
   #clampManualOffsets({ width, height, drawWidth, drawHeight, offsetX, offsetY }) {
@@ -2640,7 +2942,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       customFrame: customFrameConfig,
       canvasSize: customFrameConfig ? MANUAL_CUSTOM_FRAME_CANVAS_SIZE : null,
       compositionScale: customFrameConfig ? previewZoom : 1,
-      allowOverflowCanvas: Boolean(customFrameConfig)
+      allowOverflowCanvas: true,
+      centerOverflowCanvas: !customFrameConfig
     });
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -2650,15 +2953,18 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     const tokenWidth = tokenCanvas.width || 1;
     const tokenHeight = tokenCanvas.height || 1;
-    const previewViewportSize = customFrameConfig
-      ? Math.max(1, Number.isFinite(metadata?.viewportSize) ? metadata.viewportSize : MANUAL_CUSTOM_FRAME_CANVAS_SIZE)
-      : tokenWidth;
+    const previewViewportSize = Math.max(
+      1,
+      Number.isFinite(metadata?.viewportSize)
+        ? metadata.viewportSize
+        : (customFrameConfig ? MANUAL_CUSTOM_FRAME_CANVAS_SIZE : tokenWidth)
+    );
     const fitScale = Math.min(width / previewViewportSize, height / previewViewportSize);
     const drawScale = Math.max(0.0001, fitScale * (customFrameConfig ? 1 : previewZoom));
     const drawWidth = tokenWidth * drawScale;
     const drawHeight = tokenHeight * drawScale;
-    const viewportX = customFrameConfig ? (metadata?.viewportX ?? Math.max(0, (tokenWidth - previewViewportSize) / 2)) : 0;
-    const viewportY = customFrameConfig ? (metadata?.viewportY ?? Math.max(0, (tokenHeight - previewViewportSize) / 2)) : 0;
+    const viewportX = metadata?.viewportX ?? Math.max(0, (tokenWidth - previewViewportSize) / 2);
+    const viewportY = metadata?.viewportY ?? Math.max(0, (tokenHeight - previewViewportSize) / 2);
     const viewportOffsetX = (width - (previewViewportSize * drawScale)) / 2;
     const viewportOffsetY = (height - (previewViewportSize * drawScale)) / 2;
     const offsetX = viewportOffsetX - (viewportX * drawScale);
@@ -2711,17 +3017,17 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     return uploadFileToActorFolder(file, this.actor, { notifyOnError: false });
   }
 
-  #buildGeneratedTokenImage(uploadedPath, sort = 0, { customFrameEnabled = false, textureScale = 1 } = {}) {
+  #buildGeneratedTokenImage(uploadedPath, sort = 0, { customFrameEnabled = false, textureScale = 1, manualTokenMetadata = null, useManualDynamicRingOverflow = false } = {}) {
     const safeTextureScale = this.#clampNumber(
       Number.isFinite(textureScale) ? textureScale : 1,
       0.05,
       100
     );
-    return {
+    const tokenImage = {
       id: foundry.utils.randomID(),
       src: uploadedPath,
-      scaleX: customFrameEnabled ? safeTextureScale : (this.actor?.prototypeToken?.texture?.scaleX ?? 1),
-      scaleY: customFrameEnabled ? safeTextureScale : (this.actor?.prototypeToken?.texture?.scaleY ?? 1),
+      scaleX: customFrameEnabled ? safeTextureScale : ((this.actor?.prototypeToken?.texture?.scaleX ?? 1) * (useManualDynamicRingOverflow ? safeTextureScale : 1)),
+      scaleY: customFrameEnabled ? safeTextureScale : ((this.actor?.prototypeToken?.texture?.scaleY ?? 1) * (useManualDynamicRingOverflow ? safeTextureScale : 1)),
       sort,
       isDefault: false,
       autoEnable: {
@@ -2736,9 +3042,17 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         enabled: !customFrameEnabled,
         scaleCorrection: 1,
         ringColor: "#ffffff",
-        backgroundColor: "#000000"
+        backgroundColor: "#000000",
+        texture: null,
+        subjectScaleCorrection: 1
       }
     };
+
+    if (manualTokenMetadata) {
+      tokenImage.manualToken = manualTokenMetadata;
+    }
+
+    return tokenImage;
   }
 
   async #onCreateTokenForAll(event) {
@@ -2845,11 +3159,14 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           }
 
           image.src = uploadedPath;
+          delete image.manualToken;
+          const currentDynamicRing = image.dynamicRing ?? {};
           image.dynamicRing = {
             enabled: true,
             scaleCorrection: 1,
-            ringColor: "#ffffff",
-            backgroundColor: "#000000"
+            ringColor: currentDynamicRing.ringColor ?? "#ffffff",
+            backgroundColor: currentDynamicRing.backgroundColor ?? "#000000",
+            texture: null
           };
 
           created += 1;

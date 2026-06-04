@@ -181,9 +181,11 @@ export class AutoTokenService {
      * @param {number} [params.canvasSize]
      * @param {number} [params.compositionScale=1]
      * @param {boolean} [params.allowOverflowCanvas=false]
+     * @param {boolean} [params.centerOverflowCanvas=false]
+     * @param {"full"|"base"|"additions"} [params.maskMode="full"]
      * @returns {Promise<{blob: Blob, cropRect: object, renderMetadata: object}>}
      */
-    async createTokenBlobFromSelection({ imageSource, centerX, centerY, cropSize, alphaPolygons = null, customFrame = null, canvasSize = null, compositionScale = 1, allowOverflowCanvas = false }) {
+    async createTokenBlobFromSelection({ imageSource, centerX, centerY, cropSize, alphaPolygons = null, customFrame = null, canvasSize = null, compositionScale = 1, allowOverflowCanvas = false, centerOverflowCanvas = false, maskMode = "full" }) {
         const img = await this._loadImage(imageSource);
         const imgWidth = img.naturalWidth || img.width;
         const imgHeight = img.naturalHeight || img.height;
@@ -206,7 +208,9 @@ export class AutoTokenService {
             customFrame,
             canvasSize,
             compositionScale,
-            allowOverflowCanvas
+            allowOverflowCanvas,
+            centerOverflowCanvas,
+            maskMode
         });
 
         const blob = await this._canvasToWebpBlob(canvas);
@@ -227,9 +231,11 @@ export class AutoTokenService {
      * @param {number} [params.canvasSize]
      * @param {number} [params.compositionScale=1]
      * @param {boolean} [params.allowOverflowCanvas=false]
+     * @param {boolean} [params.centerOverflowCanvas=false]
+     * @param {"full"|"base"|"additions"} [params.maskMode="full"]
      * @returns {{canvas: HTMLCanvasElement, metadata: object}}
      */
-    createTokenCanvasFromSelection({ image, centerX, centerY, cropSize, alphaPolygons = null, customFrame = null, canvasSize = null, compositionScale = 1, allowOverflowCanvas = false }) {
+    createTokenCanvasFromSelection({ image, centerX, centerY, cropSize, alphaPolygons = null, customFrame = null, canvasSize = null, compositionScale = 1, allowOverflowCanvas = false, centerOverflowCanvas = false, maskMode = "full" }) {
         const img = image;
         if (!(img instanceof HTMLImageElement)) {
             throw new Error("[MTA AutoToken] createTokenCanvasFromSelection: image must be HTMLImageElement.");
@@ -256,7 +262,9 @@ export class AutoTokenService {
             customFrame,
             canvasSize,
             compositionScale,
-            allowOverflowCanvas
+            allowOverflowCanvas,
+            centerOverflowCanvas,
+            maskMode
         });
     }
 
@@ -316,13 +324,14 @@ export class AutoTokenService {
 
     /**
      * Рендерит квадратный canvas из квадратного crop исходного изображения.
-     * Ручной режим расширяет source-crop до вызова этого метода, поэтому итоговая композиция
-     * остаётся в масштабе x1 без отдельного scaleCorrection у dynamic ring.
+     * Overflow-режим может увеличить итоговый canvas и вернуть textureScale для компенсации
+     * через texture scale или Dynamic Ring subject scale.
      * @private
      */
-    _renderTokenCanvasFromCrop({ img, sx, sy, sw, sh, alphaPolygons = null, customFrame = null, canvasSize = null, compositionScale = 1, allowOverflowCanvas = false }) {
+    _renderTokenCanvasFromCrop({ img, sx, sy, sw, sh, alphaPolygons = null, customFrame = null, canvasSize = null, compositionScale = 1, allowOverflowCanvas = false, centerOverflowCanvas = false, maskMode = "full" }) {
         const baseCanvasSize = Math.max(1, Math.round(Number.isFinite(canvasSize) ? canvasSize : (customFrame?.image ? CUSTOM_FRAME_TOKEN_SIZE : TOKEN_SIZE)));
         const safeCompositionScale = Math.max(0.05, Number.isFinite(compositionScale) ? compositionScale : 1);
+        const safeMaskMode = maskMode === "base" || maskMode === "additions" ? maskMode : "full";
         const baseCanvasCenter = baseCanvasSize / 2;
 
         const imgWidth = img.naturalWidth || img.width;
@@ -460,18 +469,21 @@ export class AutoTokenService {
         const overflowTop = baseBounds ? Math.max(0, -baseBounds.minY) : 0;
         const overflowBottom = baseBounds ? Math.max(0, baseBounds.maxY - baseCanvasSize) : 0;
 
+        const centeredOverflowMargin = Math.ceil(Math.max(overflowLeft, overflowRight, overflowTop, overflowBottom));
         const minCanvasWidth = baseCanvasSize + overflowLeft + overflowRight;
         const minCanvasHeight = baseCanvasSize + overflowTop + overflowBottom;
         const finalCanvasSize = Math.max(
             baseCanvasSize,
-            Math.ceil(allowOverflowCanvas ? Math.max(minCanvasWidth, minCanvasHeight) : baseCanvasSize)
+            Math.ceil(allowOverflowCanvas
+                ? (centerOverflowCanvas ? baseCanvasSize + (centeredOverflowMargin * 2) : Math.max(minCanvasWidth, minCanvasHeight))
+                : baseCanvasSize)
         );
 
         const drawOffsetX = allowOverflowCanvas
-            ? Math.ceil(overflowLeft + ((finalCanvasSize - minCanvasWidth) / 2))
+            ? (centerOverflowCanvas ? centeredOverflowMargin : Math.ceil(overflowLeft + ((finalCanvasSize - minCanvasWidth) / 2)))
             : 0;
         const drawOffsetY = allowOverflowCanvas
-            ? Math.ceil(overflowTop + ((finalCanvasSize - minCanvasHeight) / 2))
+            ? (centerOverflowCanvas ? centeredOverflowMargin : Math.ceil(overflowTop + ((finalCanvasSize - minCanvasHeight) / 2)))
             : 0;
 
         const geometry = computeGeometry({
@@ -563,8 +575,8 @@ export class AutoTokenService {
         };
 
         const finalMaskCanvas = buildMaskCanvas({
-            includeCircle: true,
-            includeAdditions: true,
+            includeCircle: safeMaskMode !== "additions",
+            includeAdditions: safeMaskMode !== "base",
             includeSubtractions: true
         });
 
@@ -598,7 +610,9 @@ export class AutoTokenService {
                 viewportSize: baseCanvasSize,
                 textureScale: finalCanvasSize / Math.max(1, baseCanvasSize),
                 compositionScale: safeCompositionScale,
-                allowOverflowCanvas: Boolean(allowOverflowCanvas)
+                allowOverflowCanvas: Boolean(allowOverflowCanvas),
+                centerOverflowCanvas: Boolean(centerOverflowCanvas),
+                maskMode: safeMaskMode
             }
         };
     }

@@ -24,8 +24,11 @@ export class ImageData extends foundry.abstract.DataModel {
         enabled: new fields.BooleanField({ required: true, initial: false }),
         scaleCorrection: new fields.NumberField({ required: true, initial: 1 }),
         ringColor: new fields.ColorField({ required: true, initial: "#ffffff" }),
-        backgroundColor: new fields.ColorField({ required: true, initial: "#000000" })
-      })
+        backgroundColor: new fields.ColorField({ required: true, initial: "#000000" }),
+        texture: new fields.StringField({ required: false, blank: true, nullable: true, initial: null }),
+        subjectScaleCorrection: new fields.NumberField({ required: false, nullable: false, initial: 1 })
+      }),
+      manualToken: new fields.ObjectField({ required: false, nullable: true })
     };
   }
 }

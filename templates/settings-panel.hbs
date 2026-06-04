@@ -94,6 +94,12 @@
       <i class="fas fa-crosshairs"></i> {{localize "MTA.CreateManualToken"}}
     </button>
 
+    {{#if canEditManualToken}}
+    <button type="button" class="mta-create-token-btn mta-create-manual-token-btn" data-action="edit-manual-token">
+      <i class="fas fa-pen-to-square"></i> {{localize "MTA.EditManualToken"}}
+    </button>
+    {{/if}}
+
     <label class="label-file">
       <span class="label-text">{{localize "MTA.ImageFile"}}</span>
       <div class="mta-file-input">
