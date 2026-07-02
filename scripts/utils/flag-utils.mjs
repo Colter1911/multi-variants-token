@@ -123,8 +123,10 @@ function sanitizeManualToken(rawManualToken) {
     render: {
       customFrameEnabled: toBoolean(render.customFrameEnabled, customFrameEnabled && !!frameSrc),
       textureScale: clamp(toNumber(render.textureScale, 1), 0.05, 100),
+      textureScaleAppliedToStoredScale: toBoolean(render.textureScaleAppliedToStoredScale, toBoolean(render.customFrameEnabled, customFrameEnabled && !!frameSrc)),
       canvasSize: render.canvasSize === null || render.canvasSize === undefined ? null : Math.max(1, toInteger(render.canvasSize, 512)),
       compositionScale: clamp(toNumber(render.compositionScale, 1), 0.05, 100),
+      ringSubjectScaleCorrection: clamp(toNumber(render.ringSubjectScaleCorrection, 1), 0.05, 100),
       allowOverflowCanvas: toBoolean(render.allowOverflowCanvas, true),
       centerOverflowCanvas: toBoolean(render.centerOverflowCanvas, true),
       maskMode: render.maskMode === "base" || render.maskMode === "additions" ? render.maskMode : "full"
@@ -199,7 +201,21 @@ function sanitizeImageList(rawList, { allowManualToken = false } = {}) {
 
     if (allowManualToken) {
       const manualToken = sanitizeManualToken(image.manualToken);
-      if (manualToken) sanitizedImage.manualToken = manualToken;
+      if (manualToken) {
+        sanitizedImage.manualToken = manualToken;
+
+        const isManualDynamicRingOverflow = !manualToken.render.customFrameEnabled
+          && manualToken.render.textureScaleAppliedToStoredScale === false;
+        const textureScale = Number(manualToken.render.textureScale);
+        const scaleLooksTechnical = (value) => Number.isFinite(textureScale)
+          && textureScale > 0
+          && Math.abs(Number(value) - textureScale) <= Math.max(0.01, textureScale * 0.02);
+
+        if (isManualDynamicRingOverflow) {
+          if (scaleLooksTechnical(sanitizedImage.scaleX)) sanitizedImage.scaleX = 1;
+          if (scaleLooksTechnical(sanitizedImage.scaleY)) sanitizedImage.scaleY = 1;
+        }
+      }
     }
 
     result.push(sanitizedImage);

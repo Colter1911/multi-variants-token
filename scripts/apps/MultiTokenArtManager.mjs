@@ -1212,6 +1212,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       render: {
         customFrameEnabled,
         textureScale: this.#clampNumber(Number(renderMetadata?.textureScale ?? 1), 0.05, 100),
+        textureScaleAppliedToStoredScale: customFrameEnabled,
+        ringSubjectScaleCorrection: this.#clampNumber(Number(renderMetadata?.ringSubjectScaleCorrection ?? 1), 0.05, 100),
         canvasSize: customFrameEnabled ? MANUAL_CUSTOM_FRAME_CANVAS_SIZE : null,
         compositionScale: this.#clampNumber(Number(renderMetadata?.compositionScale ?? state.previewZoom ?? 1), 0.05, 100),
         allowOverflowCanvas: true,
@@ -1277,6 +1279,9 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       0.05,
       100
     );
+    const ringSubjectScaleCorrection = useManualDynamicRingOverflow
+      ? this.#clampNumber(Number(manualTokenMetadata?.render?.ringSubjectScaleCorrection ?? 1), 0.05, 100)
+      : 1;
 
     if (imageType === IMAGE_TYPES.PORTRAIT) {
       const tokenList = sortImagesByOrder(data.tokenImages ?? []);
@@ -1308,8 +1313,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       if (!tokenImage) {
         return null;
       }
-      const baseScaleX = this.#resolveTokenImageBaseTextureScale(tokenImage, "scaleX");
-      const baseScaleY = this.#resolveTokenImageBaseTextureScale(tokenImage, "scaleY");
       tokenImage.src = uploadedPath;
       if (generationMode === "manual" && manualTokenMetadata) {
         tokenImage.manualToken = manualTokenMetadata;
@@ -1320,8 +1323,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         tokenImage.scaleX = safeTextureScale;
         tokenImage.scaleY = safeTextureScale;
       } else if (useManualDynamicRingOverflow) {
-        tokenImage.scaleX = baseScaleX * safeTextureScale;
-        tokenImage.scaleY = baseScaleY * safeTextureScale;
+        tokenImage.scaleX = 1;
+        tokenImage.scaleY = 1;
       }
       targetTokenImage = tokenImage;
     }
@@ -1333,7 +1336,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       ringColor: currentDynamicRing.ringColor ?? "#ffffff",
       backgroundColor: currentDynamicRing.backgroundColor ?? "#000000",
       texture: null,
-      subjectScaleCorrection: 1
+      subjectScaleCorrection: ringSubjectScaleCorrection
     };
 
     await setActorModuleData(this.actor, data);
@@ -2592,21 +2595,6 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     return Math.min(max, Math.max(min, numeric));
   }
 
-  #resolveTokenImageBaseTextureScale(image, axis) {
-    const fallback = axis === "scaleY"
-      ? (this.actor?.prototypeToken?.texture?.scaleY ?? 1)
-      : (this.actor?.prototypeToken?.texture?.scaleX ?? 1);
-    const current = Number(image?.[axis]);
-    const safeCurrent = Number.isFinite(current) ? current : fallback;
-    const previousTextureScale = Number(image?.manualToken?.render?.textureScale);
-
-    if (Number.isFinite(previousTextureScale) && previousTextureScale > 0 && !image?.manualToken?.render?.customFrameEnabled) {
-      return safeCurrent / previousTextureScale;
-    }
-
-    return safeCurrent;
-  }
-
   #clampManualOffsets({ width, height, drawWidth, drawHeight, offsetX, offsetY }) {
     const xRange = drawWidth >= width
       ? { min: width - drawWidth, max: 0 }
@@ -3026,8 +3014,8 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const tokenImage = {
       id: foundry.utils.randomID(),
       src: uploadedPath,
-      scaleX: customFrameEnabled ? safeTextureScale : ((this.actor?.prototypeToken?.texture?.scaleX ?? 1) * (useManualDynamicRingOverflow ? safeTextureScale : 1)),
-      scaleY: customFrameEnabled ? safeTextureScale : ((this.actor?.prototypeToken?.texture?.scaleY ?? 1) * (useManualDynamicRingOverflow ? safeTextureScale : 1)),
+      scaleX: customFrameEnabled ? safeTextureScale : 1,
+      scaleY: customFrameEnabled ? safeTextureScale : 1,
       sort,
       isDefault: false,
       autoEnable: {
@@ -3044,7 +3032,9 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         ringColor: "#ffffff",
         backgroundColor: "#000000",
         texture: null,
-        subjectScaleCorrection: 1
+        subjectScaleCorrection: useManualDynamicRingOverflow
+          ? this.#clampNumber(Number(manualTokenMetadata?.render?.ringSubjectScaleCorrection ?? 1), 0.05, 100)
+          : 1
       }
     };
 

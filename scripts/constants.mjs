@@ -22,6 +22,8 @@ export const DEFAULT_HP_PATHS = {
 
 export const IMAGE_LIMIT = 100;
 
+export const MANUAL_DYNAMIC_RING_FIT_FACTOR = 0.9;
+
 export const IMAGE_TYPES = {
   TOKEN: "token",
   PORTRAIT: "portrait"

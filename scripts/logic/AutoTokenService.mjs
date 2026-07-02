@@ -1,4 +1,4 @@
-import { MODULE_ID } from "../constants.mjs";
+import { MANUAL_DYNAMIC_RING_FIT_FACTOR, MODULE_ID } from "../constants.mjs";
 
 /**
  * Сервис для автоматического создания круглых токенов из изображений
@@ -491,6 +491,7 @@ export class AutoTokenService {
             drawOffsetX,
             drawOffsetY
         });
+        const finalContentBounds = computeContentBounds(geometry);
         const {
             innerRadius,
             offsetX,
@@ -600,6 +601,18 @@ export class AutoTokenService {
             }
         }
 
+        const ringContentRadius = Math.max(
+            Math.abs(finalContentBounds.minX - centerX),
+            Math.abs(finalContentBounds.maxX - centerX),
+            Math.abs(finalContentBounds.minY - centerY),
+            Math.abs(finalContentBounds.maxY - centerY),
+            innerRadius
+        );
+        const ringContentRatio = ringContentRadius / Math.max(1, innerRadius);
+        const ringSubjectScaleCorrection = ringContentRatio > 1.0001
+            ? Math.max(1, ringContentRatio * MANUAL_DYNAMIC_RING_FIT_FACTOR)
+            : 1;
+
         return {
             canvas,
             metadata: {
@@ -612,7 +625,8 @@ export class AutoTokenService {
                 compositionScale: safeCompositionScale,
                 allowOverflowCanvas: Boolean(allowOverflowCanvas),
                 centerOverflowCanvas: Boolean(centerOverflowCanvas),
-                maskMode: safeMaskMode
+                maskMode: safeMaskMode,
+                ringSubjectScaleCorrection
             }
         };
     }

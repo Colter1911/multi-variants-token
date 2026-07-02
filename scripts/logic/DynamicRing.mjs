@@ -16,6 +16,7 @@ export function getDynamicRingUpdate(tokenDocument, ringConfig) {
   const updates = {};
   const currentFlags = tokenDocument.flags?.[MODULE_ID] ?? {};
   const userScale = Number.isFinite(Number(ringConfig.scaleCorrection)) ? Number(ringConfig.scaleCorrection) : 1;
+  const subjectScaleCorrection = Number.isFinite(Number(ringConfig.subjectScaleCorrection)) ? Number(ringConfig.subjectScaleCorrection) : 1;
 
   // Check if we need to snapshot the original state
   // We use the flags object directly to avoid async getTokenFlag overhead if possible, 
@@ -39,7 +40,7 @@ export function getDynamicRingUpdate(tokenDocument, ringConfig) {
       background: ringConfig.backgroundColor
     },
     subject: {
-      scale: userScale,
+      scale: userScale * subjectScaleCorrection,
       texture: ringConfig.texture || null // Explicitly use configured texture or CLEAR it to use token image
     }
   };

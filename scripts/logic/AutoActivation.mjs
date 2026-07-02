@@ -1,10 +1,69 @@
-import { MODULE_ID, MTA_EFFECT_ATTRIBUTES, TOKEN_FLAG_KEYS } from "../constants.mjs";
+import { MANUAL_DYNAMIC_RING_FIT_FACTOR, MODULE_ID, MTA_EFFECT_ATTRIBUTES, TOKEN_FLAG_KEYS } from "../constants.mjs";
 import { getTokenStatusValues, hasMatchingStatus } from "../system-support.mjs";
 import { getActorModuleData } from "../utils/flag-utils.mjs";
 import { resolveHpData } from "../utils/hp-resolver.mjs";
 import { applyAutoRotate } from "./AutoRotate.mjs";
 import { getDynamicRingUpdate, getRestoreRingUpdate, getDisableRingUpdate } from "./DynamicRing.mjs";
 import { sortImagesByOrder } from "./RandomMode.mjs";
+
+const MANUAL_RING_INNER_SCALE = 0.85;
+
+function computeManualRingSubjectScaleCorrection(manualToken) {
+  const selection = manualToken?.selection;
+  const cropSize = Number(selection?.cropSize);
+  const centerX = Number(selection?.centerX);
+  const centerY = Number(selection?.centerY);
+  if (!Number.isFinite(cropSize) || cropSize <= 0 || !Number.isFinite(centerX) || !Number.isFinite(centerY)) return 1;
+
+  const baseCanvasSize = 512;
+  const innerSize = baseCanvasSize * MANUAL_RING_INNER_SCALE;
+  const innerRadius = innerSize / 2;
+  const canvasCenter = baseCanvasSize / 2;
+  const sourceToTokenScale = innerSize / cropSize;
+  const sx = centerX - (cropSize / 2);
+  const sy = centerY - (cropSize / 2);
+  const offset = (baseCanvasSize - innerSize) / 2;
+
+  let radius = innerRadius;
+  const polygons = Array.isArray(manualToken?.alphaPolygons) ? manualToken.alphaPolygons : [];
+  for (const polygon of polygons) {
+    if (polygon?.operation === "subtract" || !Array.isArray(polygon?.points)) continue;
+    for (const point of polygon.points) {
+      const x = Number(point?.x);
+      const y = Number(point?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const mappedX = offset + ((x - sx) * sourceToTokenScale);
+      const mappedY = offset + ((y - sy) * sourceToTokenScale);
+      radius = Math.max(radius, Math.abs(mappedX - canvasCenter), Math.abs(mappedY - canvasCenter));
+    }
+  }
+
+  const ringContentRatio = radius / Math.max(1, innerRadius);
+  return ringContentRatio > 1.0001
+    ? Math.max(1, ringContentRatio * MANUAL_DYNAMIC_RING_FIT_FACTOR)
+    : 1;
+}
+
+function isManualDynamicRingOverflowImage(image) {
+  return Boolean(image?.manualToken?.render && !image.manualToken.render.customFrameEnabled);
+}
+
+function resolveAppliedTextureScale(image, axis) {
+  const storedScale = Number(image?.[axis]);
+  const safeStoredScale = Number.isFinite(storedScale) ? storedScale : 1;
+
+  if (!isManualDynamicRingOverflowImage(image)) return safeStoredScale;
+
+  const render = image.manualToken.render;
+  const textureScale = Number(render.textureScale);
+  if (!Number.isFinite(textureScale) || textureScale <= 0) return safeStoredScale;
+
+  if (render.textureScaleAppliedToStoredScale === false) {
+    return safeStoredScale * textureScale;
+  }
+
+  return safeStoredScale;
+}
 
 function getLinkedPortraitByTokenImage({ actorData, tokenImageId }) {
   if (!actorData?.global?.linkTokenPortrait) return null;
@@ -318,13 +377,16 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
     tokenImageId: image.id
   });
 
+  const appliedTextureScaleX = resolveAppliedTextureScale(image, "scaleX");
+  const appliedTextureScaleY = resolveAppliedTextureScale(image, "scaleY");
+
   // Actor-only context (e.g. manager opened from actor sheet without placed token).
   // Apply to prototype token so future placed tokens inherit the selection.
   if (!tokenDocument) {
     await actor.update({
       "prototypeToken.texture.src": image.src,
-      "prototypeToken.texture.scaleX": image.scaleX ?? 1,
-      "prototypeToken.texture.scaleY": image.scaleY ?? 1,
+      "prototypeToken.texture.scaleX": appliedTextureScaleX,
+      "prototypeToken.texture.scaleY": appliedTextureScaleY,
       [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id
     });
 
@@ -337,8 +399,8 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
 
   let updates = {
     "texture.src": image.src,
-    "texture.scaleX": image.scaleX ?? 1,
-    "texture.scaleY": image.scaleY ?? 1,
+    "texture.scaleX": appliedTextureScaleX,
+    "texture.scaleY": appliedTextureScaleY,
     [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id,
     [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.MANAGED_TOKEN_IMAGE_SRC}`]: image.src,
     [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.EXTERNAL_TOKEN_IMAGE_SRC}`]: null,
@@ -366,7 +428,17 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
   // Dynamic Ring
   let ringUpdates = {};
   if (image.dynamicRing?.enabled) {
-    ringUpdates = getDynamicRingUpdate(tokenDocument, image.dynamicRing);
+    const ringConfig = foundry.utils.deepClone(image.dynamicRing);
+    const isManualDynamicRingOverflow = isManualDynamicRingOverflowImage(image);
+
+    if (isManualDynamicRingOverflow) {
+      const ringSubjectScaleCorrection = Number(image.manualToken.render.ringSubjectScaleCorrection);
+      ringConfig.subjectScaleCorrection = Number.isFinite(ringSubjectScaleCorrection) && ringSubjectScaleCorrection > 0
+        ? ringSubjectScaleCorrection
+        : computeManualRingSubjectScaleCorrection(image.manualToken);
+    }
+
+    ringUpdates = getDynamicRingUpdate(tokenDocument, ringConfig);
   } else {
     ringUpdates = getDisableRingUpdate(tokenDocument);
   }
@@ -387,8 +459,8 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
     try {
       await actor.update({
         "prototypeToken.texture.src": image.src,
-        "prototypeToken.texture.scaleX": image.scaleX ?? 1,
-        "prototypeToken.texture.scaleY": image.scaleY ?? 1,
+        "prototypeToken.texture.scaleX": appliedTextureScaleX,
+        "prototypeToken.texture.scaleY": appliedTextureScaleY,
         [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id
       }, { mtaManualUpdate: true });
     } catch (error) {

@@ -89,7 +89,7 @@ Image entry shape:
 - `dynamicRing.ringColor`
 - `dynamicRing.backgroundColor`
 - `dynamicRing.texture` optional explicit Foundry Dynamic Ring subject texture.
-- `dynamicRing.subjectScaleCorrection` reserved hidden field; current Dynamic Ring scale remains driven only by user `scaleCorrection`.
+- `dynamicRing.subjectScaleCorrection` hidden technical multiplier for manual Dynamic Ring subject placement on the original alpha circle; user `scaleCorrection` remains the visible ring scale.
 - `manualToken` (optional, token images only): metadata for editable manual-token outputs.
 
 `manualToken` metadata stores:
@@ -102,7 +102,7 @@ Image entry shape:
 - `previewZoom`
 - `stageView.zoom`, `stageView.panX`, `stageView.panY`
 - `customFrame.enabled`, `customFrame.src`, `customFrame.originalSrc`, `customFrame.removeWhiteBg`, `customFrame.offsetX`, `customFrame.offsetY`, `customFrame.scale`
-- `render.customFrameEnabled`, `render.textureScale`, `render.canvasSize`, `render.compositionScale`, `render.allowOverflowCanvas`, `render.centerOverflowCanvas`, `render.maskMode`
+- `render.customFrameEnabled`, `render.textureScale`, `render.textureScaleAppliedToStoredScale`, `render.ringSubjectScaleCorrection`, `render.canvasSize`, `render.compositionScale`, `render.allowOverflowCanvas`, `render.centerOverflowCanvas`, `render.maskMode`
 
 Открытые Active Effect атрибуты из `MTA_EFFECT_ATTRIBUTES`:
 
@@ -306,7 +306,7 @@ Manual generation:
 - Preview создается через `createTokenCanvasFromSelection()`.
 - Финальный WebP создается через `createTokenBlobFromSelection()`.
 - Для custom frame используется larger canvas behavior (`1024`) и overflow-aware metadata.
-- Dynamic Ring manual outputs без custom frame используют один overflow-aware WebP как token texture. Adaptive canvas компенсируется через token `texture.scaleX/Y`, чтобы базовый круг визуально оставался scale `1`; `dynamicRing.texture` остается `null`, Foundry использует token texture как subject, а пользовательский `dynamicRing.scaleCorrection` остается `1`.
+- Dynamic Ring manual outputs без custom frame используют один overflow-aware WebP как token texture. Сохраненный/видимый `scaleX/Y` карточки принудительно остается пользовательским (`1` по умолчанию) и не наследует technical prototype scale. Adaptive canvas компенсируется техническим `render.textureScale` только в `AutoActivation` payload к Foundry. `dynamicRing.texture` остается `null`, Foundry использует token texture как subject, пользовательский `dynamicRing.scaleCorrection` остается `1`, а hidden `subjectScaleCorrection` берется из `render.ringSubjectScaleCorrection` (`full alpha bounds radius / original circle radius`; fit factor `0.9` применяется только когда additive alpha реально расширила bounds), чтобы рамка считалась по исходному выбранному alpha-кругу, а не по дорисованной alpha. Для старых manual metadata без этого поля `AutoActivation` пересчитывает коэффициент из сохраненных `selection` и `alphaPolygons`; `flag-utils` также нормализует legacy stored `scaleX/Y`, если они совпадают с technical `render.textureScale`.
 - Custom-frame outputs отключают Dynamic Ring и сохраняют `textureScale` из render metadata в token texture scale, чтобы итоговый token scale совпадал с preview.
 - При сохранении manual generation записывает `manualToken` metadata на итоговый token image. Полный source и custom frame cache-ятся через `uploadFileToActorFolder()` для `blob:`/`data:`/remote sources, чтобы edit mode не зависел от временных object URL.
 - Уже созданный manual token с metadata можно открыть из token settings через edit action. Dialog восстанавливает исходную полную картинку, фиксированный crop, preview zoom, stage pan/zoom, applied alpha polygons и custom frame state, затем сохраняет результат в тот же token image.
