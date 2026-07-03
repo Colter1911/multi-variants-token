@@ -1,7 +1,7 @@
 import { IMAGE_LIMIT, IMAGE_TYPES, MODULE_ID, TOKEN_FLAG_KEYS } from "../constants.mjs";
 import { getStatusOptionsForSelectedSystem, normalizeStatusValue } from "../system-support.mjs";
 import { getActorModuleData, setActorModuleData } from "../utils/flag-utils.mjs";
-import { ensureActorDirectory, uploadFileToActorFolder } from "../utils/file-utils.mjs";
+import { ensureActorDirectory, getFilePickerClass, uploadFileToActorFolder } from "../utils/file-utils.mjs";
 import { pickRandomImage, sortImagesByOrder } from "../logic/RandomMode.mjs";
 import { applyTokenImageById, applyPortraitById, runAutoActivation } from "../logic/AutoActivation.mjs";
 import { applyAutoRotate } from "../logic/AutoRotate.mjs";
@@ -106,7 +106,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         src: defaultSrc,
         sort: 0,
         isDefault: true,
-        autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false, status: "" },
+        autoEnable: { enabled: false, combat: false, wounded: false, woundedPercent: 50, die: false, status: "" },
         customScript: "",
         dynamicRing: initialRing
       }];
@@ -121,7 +121,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
         src: defaultSrc,
         sort: 0,
         isDefault: true,
-        autoEnable: { enabled: false, wounded: false, woundedPercent: 50, die: false, status: "" },
+        autoEnable: { enabled: false, combat: false, wounded: false, woundedPercent: 50, die: false, status: "" },
         customScript: "",
         dynamicRing: { enabled: false, scaleCorrection: 1, ringColor: "#ffffff", backgroundColor: "#000000", texture: null, subjectScaleCorrection: 1 }
       }];
@@ -139,9 +139,13 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     // Нормализация: добавляем autoEnable.enabled если не задано (для обратной совместимости)
     const normalizeImage = (image) => {
       if (!image.autoEnable) {
-        image.autoEnable = { enabled: false, wounded: false, woundedPercent: 50, die: false, status: "" };
+        image.autoEnable = { enabled: false, combat: false, wounded: false, woundedPercent: 50, die: false, status: "" };
       } else if (image.autoEnable.enabled === undefined) {
         image.autoEnable.enabled = false;
+      }
+
+      if (typeof image.autoEnable.combat !== "boolean") {
+        image.autoEnable.combat = false;
       }
 
       if (typeof image.autoEnable.status !== "string") {
@@ -370,11 +374,13 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
           const enabled = e.target.checked;
           const woundedCheckbox = settingsPanel.querySelector("[name='autoEnable.wounded']");
           const woundedPercent = settingsPanel.querySelector("[name='autoEnable.woundedPercent']");
+          const combatCheckbox = settingsPanel.querySelector("[name='autoEnable.combat']");
           const dieCheckbox = settingsPanel.querySelector("[name='autoEnable.die']");
           const statusSelect = settingsPanel.querySelector("[name='autoEnable.status']");
 
           if (woundedCheckbox) woundedCheckbox.disabled = !enabled;
           if (woundedPercent) woundedPercent.disabled = !enabled;
+          if (combatCheckbox) combatCheckbox.disabled = !enabled;
           if (dieCheckbox) dieCheckbox.disabled = !enabled;
           if (statusSelect) statusSelect.disabled = !enabled;
         });
@@ -738,6 +744,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       isDefault: list.length === 0,
       autoEnable: {
         enabled: false,
+        combat: false,
         wounded: false,
         woundedPercent: 50,
         die: false,
@@ -851,6 +858,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     const autoEnable = {
       enabled: panel.querySelector("[name='autoEnable.enabled']")?.checked || false,
+      combat: panel.querySelector("[name='autoEnable.combat']")?.checked || false,
       wounded: panel.querySelector("[name='autoEnable.wounded']")?.checked || false,
       woundedPercent: Number(panel.querySelector("[name='autoEnable.woundedPercent']")?.value || 50),
       die: panel.querySelector("[name='autoEnable.die']")?.checked || false,
@@ -1004,7 +1012,13 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
     const input = event.currentTarget.previousElementSibling;
     const current = input.value;
 
-    const picker = new FilePicker({
+    const FilePickerClass = getFilePickerClass();
+    if (!FilePickerClass) {
+      ui.notifications.error("FilePicker is not available.");
+      return;
+    }
+
+    const picker = new FilePickerClass({
       type: "image",
       current: current,
       callback: (path) => {
@@ -2381,7 +2395,13 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
 
     // ── Frame file picker ─────────────────────────────────────────────────────
     const onFrameBrowse = () => {
-      const fp = new FilePicker({
+      const FilePickerClass = getFilePickerClass();
+      if (!FilePickerClass) {
+        ui.notifications.error("FilePicker is not available.");
+        return;
+      }
+
+      const fp = new FilePickerClass({
         type: "image",
         current: state.customFrame.src ?? "",
         callback: (path) => loadFrameFromUrl(path)
@@ -3020,6 +3040,7 @@ export class MultiTokenArtManager extends HandlebarsApplicationMixin(Application
       isDefault: false,
       autoEnable: {
         enabled: false,
+        combat: false,
         wounded: false,
         woundedPercent: 50,
         die: false,

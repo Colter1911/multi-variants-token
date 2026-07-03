@@ -1,8 +1,8 @@
-import { MODULE_ID, TOKEN_FLAG_KEYS } from "./constants.mjs";
+import { MODULE_ID, MTA_EFFECT_ATTRIBUTES, TOKEN_FLAG_KEYS } from "./constants.mjs";
 import { registerSettings, applySystemPresetIfNeeded, showFirstRunSystemDialogIfNeeded } from "./settings.mjs";
 import { getConfiguredHpPaths as getConfiguredSystemHpPaths, isPf2eConditionItem } from "./system-support.mjs";
 import { registerTokenHudButton, openManagerForTokenDocument, openManagerForActor } from "./ui/TokenHUD.mjs";
-import { registerFileSocketHandlers } from "./utils/file-utils.mjs";
+import { getActiveGm, registerFileSocketHandlers } from "./utils/file-utils.mjs";
 import {
   runAutoActivation,
   applyTokenImageById,
@@ -50,9 +50,57 @@ function resolveTokenDocumentFromSheet(sheet) {
   return sheet?.token?.document ?? sheet?.token ?? null;
 }
 
+function createActorSheetHeaderControl({ actionId, localized, open }) {
+  return {
+    action: actionId,
+    class: ACTOR_SHEET_BUTTON_CLASS,
+    icon: "fas fa-masks-theater",
+    label: localized,
+    title: localized,
+    onClick: open,
+    onclick: open,
+    callback: open
+  };
+}
+
+function headerControlMatches(control, actionId, localized) {
+  return control?.action === actionId
+    || control?.class === ACTOR_SHEET_BUTTON_CLASS
+    || control?.label === localized
+    || control?.title === localized;
+}
+
+function insertActorSheetHeaderControl(controls, control, actionId, localized) {
+  if (Array.isArray(controls)) {
+    if (!controls.some((entry) => headerControlMatches(entry, actionId, localized))) controls.unshift(control);
+    return;
+  }
+
+  if (controls instanceof Map) {
+    if (![...controls.values()].some((entry) => headerControlMatches(entry, actionId, localized))) {
+      controls.set(actionId, control);
+    }
+    return;
+  }
+
+  if (!controls || typeof controls !== "object") return;
+
+  const values = Object.values(controls);
+  if (values.some((entry) => headerControlMatches(entry, actionId, localized))) return;
+
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      insertActorSheetHeaderControl(value, control, actionId, localized);
+      return;
+    }
+  }
+
+  controls[actionId] = control;
+}
+
 function pushActorSheetHeaderControl(sheetLike, controls) {
   const actor = resolveActorFromSheet(sheetLike);
-  if (!actor || !actor.isOwner || !Array.isArray(controls)) return;
+  if (!actor || !actor.isOwner) return;
 
   const actionId = `${MODULE_ID}.open-manager`;
   const localized = game.i18n.localize("MTA.OpenManager");
@@ -63,25 +111,12 @@ function pushActorSheetHeaderControl(sheetLike, controls) {
     openManagerForActor(actor, tokenDocument);
   };
 
-  if (controls.some((control) =>
-    control?.action === actionId
-    || control?.class === ACTOR_SHEET_BUTTON_CLASS
-    || control?.label === localized
-    || control?.title === localized
-  )) {
-    return;
-  }
-
-  controls.unshift({
-    action: actionId,
-    class: ACTOR_SHEET_BUTTON_CLASS,
-    icon: "fas fa-masks-theater",
-    label: localized,
-    title: localized,
-    onClick: open,
-    onclick: open,
-    callback: open
-  });
+  insertActorSheetHeaderControl(
+    controls,
+    createActorSheetHeaderControl({ actionId, localized, open }),
+    actionId,
+    localized
+  );
 }
 
 function bindActorSheetHeaderControl(sheetLike, htmlLike) {
@@ -210,14 +245,15 @@ function shouldCurrentUserRunTokenAutomation(tokenDocument) {
 
   // Выполняем автоматизацию только на активном ГМ, чтобы не дублировать апдейты
   // и не ловить ошибки прав у игроков при broadcast-хуках.
+  const activeGm = getActiveGm();
   if (user.isGM) {
-    const activeGmId = game.users?.activeGM?.id ?? null;
+    const activeGmId = activeGm?.id ?? null;
     return !activeGmId || activeGmId === user.id;
   }
 
   // Пока в сессии есть активный ГМ, автоматизация токена выполняется только у него.
   // Для edge-case без активного ГМ разрешаем выполнить только при реальных правах update.
-  if (game.users?.activeGM) return false;
+  if (activeGm) return false;
 
   return canCurrentUserUpdateToken(tokenDocument);
 }
@@ -243,6 +279,8 @@ function setModuleApi() {
 // Ключ: дебаунс пересоздаётся при каждом вызове чтобы не замыкать устаревшего актора
 const _actorAutoActivationDebounced = new Map();
 const _actorAutoActivationRunning = new Set();
+const _tokenAutoActivationDebounced = new Map();
+const _tokenAutoActivationRunning = new Set();
 
 async function runAutoActivationForActor(actor, runOptions = {}) {
   if (!actor || !actorHasModuleFlags(actor)) return;
@@ -282,6 +320,38 @@ function scheduleAutoActivationForActor(actor, runOptions = {}) {
   debouncedFn();
 }
 
+async function runAutoActivationForTokenDocument(tokenDocument, runOptions = {}) {
+  const actor = tokenDocument?.actor;
+  if (!actor || !actorHasModuleFlags(actor)) return;
+  if (!shouldCurrentUserRunTokenAutomation(tokenDocument)) return;
+  await runAutoActivation({ actor, tokenDocument, ...runOptions });
+}
+
+function scheduleAutoActivationForTokenDocument(tokenDocument, runOptions = {}) {
+  if (!tokenDocument) return;
+
+  const actor = tokenDocument.actor;
+  if (!actor || !actorHasModuleFlags(actor)) return;
+
+  const key = tokenDocument.uuid ?? `${tokenDocument.parent?.id ?? "scene"}.${tokenDocument.id ?? foundry.utils.randomID()}`;
+  if (!key) return;
+
+  const debouncedFn = foundry.utils.debounce(async () => {
+    if (_tokenAutoActivationRunning.has(key)) return;
+    _tokenAutoActivationRunning.add(key);
+    try {
+      await runAutoActivationForTokenDocument(tokenDocument, runOptions);
+    } finally {
+      _tokenAutoActivationRunning.delete(key);
+    }
+  }, 200);
+
+  const existing = _tokenAutoActivationDebounced.get(key);
+  if (existing) existing.cancel?.();
+  _tokenAutoActivationDebounced.set(key, debouncedFn);
+  debouncedFn();
+}
+
 function resolveActorFromActiveEffect(effect) {
   const parent = effect?.parent;
   if (parent?.documentName === "Actor") return parent;
@@ -294,8 +364,97 @@ function resolveActorFromEmbeddedItem(item) {
   return null;
 }
 
-function getActiveEffectRunOptions(effect) {
-  return activeEffectHasMtaImageOverride(effect) ? MTA_EFFECT_FORCE_OPTIONS : {};
+function normalizeEffectChangeKey(key) {
+  return String(key ?? "").trim().toLowerCase();
+}
+
+function hasMtaOverrideChangeEntry(change) {
+  const key = normalizeEffectChangeKey(change?.key);
+  return key === MTA_EFFECT_ATTRIBUTES.TOKEN_IMAGE_INDEX
+    || key === MTA_EFFECT_ATTRIBUTES.PORTRAIT_IMAGE_INDEX;
+}
+
+function getIterableValues(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (value instanceof Set) return Array.from(value);
+  if (value instanceof Map) return Array.from(value.values());
+  if (typeof value.values === "function") return Array.from(value.values());
+  if (value?.[Symbol.iterator]) return Array.from(value);
+  if (typeof value === "object") return Object.values(value);
+  return [];
+}
+
+function activeEffectChangePayloadTouchesOverrides(changes) {
+  if (!changes) return false;
+
+  const candidates = [
+    changes,
+    changes.changes,
+    changes.system?.changes,
+    foundry.utils.getProperty(changes, "changes"),
+    foundry.utils.getProperty(changes, "system.changes")
+  ];
+
+  for (const candidate of candidates) {
+    const entries = getIterableValues(candidate);
+    if (entries.some(hasMtaOverrideChangeEntry)) return true;
+  }
+
+  return foundry.utils.hasProperty(changes, "changes")
+    || foundry.utils.hasProperty(changes, "system.changes");
+}
+
+function getActiveEffectRunOptions(effect, changes = null) {
+  return activeEffectHasMtaImageOverride(effect) || activeEffectChangePayloadTouchesOverrides(changes)
+    ? MTA_EFFECT_FORCE_OPTIONS
+    : {};
+}
+
+function resolveCombatantTokenDocument(combatant) {
+  if (combatant?.token?.document) return combatant.token.document;
+  if (combatant?.token?.documentName === "Token") return combatant.token;
+  if (combatant?.tokenDocument?.documentName === "Token") return combatant.tokenDocument;
+
+  const tokenId = combatant?.tokenId ?? null;
+  if (!tokenId) return null;
+
+  const scene = combatant?.scene
+    ?? (combatant?.sceneId ? game.scenes?.get(combatant.sceneId) : null)
+    ?? canvas?.scene
+    ?? null;
+
+  return scene?.tokens?.get?.(tokenId) ?? null;
+}
+
+function getCombatantsFromCombat(combat) {
+  return combat?.combatants ? Array.from(combat.combatants) : [];
+}
+
+function scheduleAutoActivationForCombatant(combatant, runOptions = {}) {
+  const tokenDocument = resolveCombatantTokenDocument(combatant);
+  if (tokenDocument) {
+    scheduleAutoActivationForTokenDocument(tokenDocument, runOptions);
+    return;
+  }
+
+  const actor = combatant?.actor ?? null;
+  if (actor) scheduleAutoActivationForActor(actor, runOptions);
+}
+
+function scheduleAutoActivationForCombat(combat, runOptions = {}) {
+  for (const combatant of getCombatantsFromCombat(combat)) {
+    scheduleAutoActivationForCombatant(combatant, runOptions);
+  }
+}
+
+function hasCombatActivationChange(changes) {
+  if (!changes) return true;
+  return foundry.utils.hasProperty(changes, "started")
+    || foundry.utils.hasProperty(changes, "round")
+    || foundry.utils.hasProperty(changes, "active")
+    || foundry.utils.hasProperty(changes, "scene")
+    || foundry.utils.hasProperty(changes, "combatants");
 }
 
 Hooks.once("init", async () => {
@@ -385,11 +544,11 @@ Hooks.on("createActiveEffect", (effect, _options) => {
   scheduleAutoActivationForActor(actor, getActiveEffectRunOptions(effect));
 });
 
-Hooks.on("updateActiveEffect", (effect, _changes, options) => {
+Hooks.on("updateActiveEffect", (effect, changes, options) => {
   if (options?.mtaManualUpdate) return;
   const actor = resolveActorFromActiveEffect(effect);
   if (!actor) return;
-  scheduleAutoActivationForActor(actor, getActiveEffectRunOptions(effect));
+  scheduleAutoActivationForActor(actor, getActiveEffectRunOptions(effect, changes));
 });
 
 Hooks.on("deleteActiveEffect", (effect, _options) => {
@@ -418,6 +577,33 @@ Hooks.on("deleteItem", (item, _options) => {
   const actor = resolveActorFromEmbeddedItem(item);
   if (!actor) return;
   scheduleAutoActivationForActor(actor);
+});
+
+Hooks.on("createCombat", (combat, _options) => {
+  scheduleAutoActivationForCombat(combat);
+});
+
+Hooks.on("updateCombat", (combat, changes, options) => {
+  if (options?.mtaManualUpdate) return;
+  if (!hasCombatActivationChange(changes)) return;
+  scheduleAutoActivationForCombat(combat);
+});
+
+Hooks.on("deleteCombat", (combat, _options) => {
+  scheduleAutoActivationForCombat(combat);
+});
+
+Hooks.on("createCombatant", (combatant, _options) => {
+  scheduleAutoActivationForCombatant(combatant);
+});
+
+Hooks.on("updateCombatant", (combatant, _changes, options) => {
+  if (options?.mtaManualUpdate) return;
+  scheduleAutoActivationForCombatant(combatant);
+});
+
+Hooks.on("deleteCombatant", (combatant, _options) => {
+  scheduleAutoActivationForCombatant(combatant);
 });
 
 Hooks.on("createToken", async (tokenDocument) => {

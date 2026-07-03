@@ -1,5 +1,6 @@
 import { DEFAULT_HP_PATHS, MODULE_ID, SETTINGS, SYSTEM_MODES } from "./constants.mjs";
 import { getDetectedSystemMode, getHpPresetForMode, getSystemModeChoices } from "./system-support.mjs";
+import { getActiveGm } from "./utils/file-utils.mjs";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -78,7 +79,7 @@ function resolveDialogRoot(htmlLike) {
 
 function isActiveGm() {
   if (!game.user?.isGM) return false;
-  const activeGmId = game.users?.activeGM?.id ?? null;
+  const activeGmId = getActiveGm()?.id ?? null;
   return !activeGmId || activeGmId === game.user.id;
 }
 

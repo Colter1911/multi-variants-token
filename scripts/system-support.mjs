@@ -135,6 +135,16 @@ export function normalizeStatusValue(value) {
 
 function pushStatusValue(statuses, value) {
   if (value === null || value === undefined) return;
+  if (typeof value === "object") {
+    if (value instanceof Map || value instanceof Set || Array.isArray(value)) {
+      pushIterableStatuses(statuses, value);
+      return;
+    }
+
+    pushDocumentStatusValues(statuses, value);
+    return;
+  }
+
   const raw = String(value).trim();
   if (!raw) return;
   statuses.add(raw);
@@ -142,8 +152,19 @@ function pushStatusValue(statuses, value) {
 
 function pushIterableStatuses(statuses, values) {
   if (!values) return;
-  if (values instanceof Set || Array.isArray(values)) {
+
+  if (values instanceof Map) {
+    for (const entry of values.values()) pushStatusValue(statuses, entry);
+    return;
+  }
+
+  if (values instanceof Set || Array.isArray(values) || values?.[Symbol.iterator]) {
     for (const entry of values) pushStatusValue(statuses, entry);
+    return;
+  }
+
+  if (typeof values === "object") {
+    for (const entry of Object.values(values)) pushStatusValue(statuses, entry);
   }
 }
 
@@ -172,6 +193,7 @@ function pushDocumentStatusValues(statuses, document) {
   pushIterableStatuses(statuses, document.traits);
   pushIterableStatuses(statuses, foundry.utils.getProperty(document, "system.traits.value"));
   pushIterableStatuses(statuses, foundry.utils.getProperty(document, "system.statuses"));
+  pushIterableStatuses(statuses, foundry.utils.getProperty(document, "system.traits"));
 
   const nestedStatus = document?.statuses?.status;
   if (Array.isArray(nestedStatus)) pushIterableStatuses(statuses, nestedStatus);
@@ -221,7 +243,7 @@ export function getTokenStatusValues(tokenDoc) {
   }
 
   const tokenEffects = tokenDoc.effects;
-  if (Array.isArray(tokenEffects)) pushIterableStatuses(statuses, tokenEffects);
+  pushIterableStatuses(statuses, tokenEffects);
 
   pushIterableStatuses(statuses, tokenDoc.statuses);
   collectPf2eConditionStatuses(statuses, tokenDoc.actor);

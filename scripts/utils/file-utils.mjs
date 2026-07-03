@@ -12,6 +12,18 @@ const SOCKET_TYPES = {
 let socketHandlersRegistered = false;
 const pendingSocketRequests = new Map();
 
+export function getFilePickerClass() {
+  return globalThis.FilePicker ?? foundry.applications?.apps?.FilePicker ?? null;
+}
+
+export function getActiveGm() {
+  const activeGm = game.users?.activeGM ?? null;
+  if (activeGm) return activeGm;
+
+  const users = game.users ? Array.from(game.users) : [];
+  return users.find((user) => user?.active && user?.isGM) ?? null;
+}
+
 export function sanitizeActorFolder(actor) {
   return actor?.name?.slugify({ strict: true }) || actor?.id || "unknown-actor";
 }
@@ -37,8 +49,11 @@ function notifyDirectoryError(error) {
 }
 
 async function createDirectoryIfMissing(target) {
+  const FilePickerClass = getFilePickerClass();
+  if (!FilePickerClass?.createDirectory) throw new Error("FilePicker is not available.");
+
   try {
-    await FilePicker.createDirectory("data", target);
+    await FilePickerClass.createDirectory("data", target);
   } catch (error) {
     if (isDirectoryExistsError(error)) return;
     throw error;
@@ -77,7 +92,8 @@ function onModuleSocketMessage(payload) {
 
 async function handleEnsureDirectoryRequest(payload) {
   if (!game.user?.isGM) return;
-  if (game.users?.activeGM?.id !== game.user.id) return;
+  const activeGm = getActiveGm();
+  if (activeGm?.id && activeGm.id !== game.user.id) return;
 
   const { requestId, requesterId, target } = payload;
   if (!requestId || !requesterId || !target) return;
@@ -145,7 +161,7 @@ export async function ensureActorDirectory(actor, { notifyOnError = true } = {})
 
     if (!socketHandlersRegistered) registerFileSocketHandlers();
 
-    if (!game.users?.activeGM) {
+    if (!getActiveGm()) {
       if (notifyOnError) notifyDirectoryError(new Error(game.i18n.localize("MTA.DirectoryCreateNoActiveGM")));
       return target;
     }
@@ -163,9 +179,12 @@ export async function ensureActorDirectory(actor, { notifyOnError = true } = {})
 export async function uploadFileToActorFolder(file, actor, { notifyOnError = false } = {}) {
   const folder = await ensureActorDirectory(actor, { notifyOnError });
   try {
+    const FilePickerClass = getFilePickerClass();
+    if (!FilePickerClass?.upload) throw new Error("FilePicker is not available.");
+
     // Disable Foundry's built-in success toast ("... saved to ...") for add/create flows.
     // Pass notify=false in both optional argument slots to stay compatible across core API variants.
-    const result = await FilePicker.upload("data", folder, file, { notify: false }, { notify: false });
+    const result = await FilePickerClass.upload("data", folder, file, { notify: false }, { notify: false });
     return result.path;
   } catch (error) {
     const message = `Upload failed: ${error.message}`;

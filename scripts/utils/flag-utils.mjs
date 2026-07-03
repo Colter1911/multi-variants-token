@@ -183,6 +183,7 @@ function sanitizeImageList(rawList, { allowManualToken = false } = {}) {
       isDefault: toBoolean(image.isDefault, false),
       autoEnable: {
         enabled: toBoolean(autoEnable.enabled, false),
+        combat: toBoolean(autoEnable.combat, false),
         wounded: toBoolean(autoEnable.wounded, false),
         woundedPercent: clamp(toInteger(autoEnable.woundedPercent, 50), 1, 99),
         die: toBoolean(autoEnable.die, false),

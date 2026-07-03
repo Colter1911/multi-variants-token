@@ -10,7 +10,7 @@
 
 - Manifest: `module.json`.
 - Module id: `multi-tokenart`.
-- Foundry compatibility: minimum/verified `13`.
+- Foundry compatibility: minimum `13`, verified `14`; v13 behavior must remain supported.
 - Сначала Foundry загружает `scripts/lib/face-api.min.js`, затем ES module `scripts/module.mjs`.
 - Стили подключаются из `styles/multi-tokenart.css`.
 - Локализация подключается из `lang/en.json` и `lang/ru.json`.
@@ -28,6 +28,7 @@
 - `updateActor` и `updateToken`: отслеживают изменения configured HP paths и запускают debounced auto activation; `updateToken` также ловит немодульные `texture.src` изменения, чтобы временно блокировать автосмену при Foundry-превращениях/маскировке.
 - `createActiveEffect`, `updateActiveEffect`, `deleteActiveEffect`: запускают auto activation при изменении статусов/эффектов.
 - `createItem`, `updateItem`, `deleteItem`: в PF2e запускают auto activation при изменении embedded condition items.
+- `createCombat`, `updateCombat`, `deleteCombat`, `createCombatant`, `updateCombatant`, `deleteCombatant`: запускают auto activation для токенов-участников активного боя, чтобы образы с `autoEnable.combat` включались/выключались при старте/завершении боя и mid-combat добавлении/удалении combatant.
 - `createToken`: выбирает начальные token/portrait images с учетом active/default/random состояния, применяет Dynamic Ring и запускает auto activation.
 - `renderActorSheet`: подменяет видимый портрет sheet на token-specific active portrait.
 
@@ -36,6 +37,7 @@
 - `scheduleAutoActivationForActor()` использует actor-объект из hook, а не `game.actors.get(actorId)`, чтобы unlinked-токены сохраняли synthetic actor delta flags.
 - Автоматизацию токена выполняет активный GM. Не-GM запускает ее только в edge-case без активного GM и при наличии прав на update токена.
 - Опция `{ mtaManualUpdate: true }` используется как guard, чтобы собственные обновления модуля не запускали повторную автоматизацию.
+- Foundry v14 compatibility guards: Active Effect changes читаются из v13 `changes` и v14 `system.changes`/source/toObject variants; active GM и FilePicker имеют fallback helpers; header controls поддерживают array/Map/object формы; token refresh предпочитает render flags и откатывается на legacy `refresh()`.
 
 ## Публичный API
 
@@ -79,6 +81,7 @@ Image entry shape:
 - `sort`
 - `isDefault`
 - `autoEnable.enabled`
+- `autoEnable.combat`
 - `autoEnable.wounded`
 - `autoEnable.woundedPercent`
 - `autoEnable.die`
@@ -181,7 +184,7 @@ Default image:
 - В каждой библиотеке должен быть один default.
 - При сохранении default image модуль сразу применяет его к actor/prototype token и, если есть token context, к текущему token.
 
-## Автоматизация по HP и статусам
+## Автоматизация по HP, статусам и бою
 
 Основные файлы:
 
@@ -193,12 +196,20 @@ Default image:
 Priority order в `findBestImageForHp()`:
 
 0. Active Effect override: `mta.settoken` / `mta.setportrait` выбирают конкретный image по 1-based номеру.
-1. Dead image: `HP <= 0` и `autoEnable.die`.
-2. Status image: `autoEnable.status` совпадает с активным статусом/эффектом.
-3. Wounded image: HP percent ниже configured threshold; более строгий threshold побеждает.
-4. Manual persistence: текущий активный image сохраняется, если он не special image.
-5. Restore pre-condition: после выхода из special state восстанавливается `preConditionImageId` или `preConditionPortraitId`.
-6. Default fallback.
+1. Combat matching pool: если tokenDocument является combatant в активном `game.combat`, сначала проверяются auto-enabled images с `autoEnable.combat`; все настроенные условия на image работают по AND (`combat`, `die`, `wounded`, `status`). Среди подходящих combat images приоритет: dead, status, wounded, combat-only.
+2. Normal matching pool: если combat image не подошел, используются обычные non-combat auto images с тем же AND-матчингом настроенных условий. Приоритет: dead, status, wounded.
+3. Manual persistence: текущий активный image сохраняется, если он не special image.
+4. Restore pre-condition: после выхода из special state восстанавливается `preConditionImageId` или `preConditionPortraitId`.
+5. Default fallback.
+
+Combat matching:
+
+- Токен считается в бою только если он является Combatant активного `game.combat`.
+- `autoEnable.combat` работает и для token images, и для portrait images.
+- Combat condition комбинируется с остальными галочками по AND: `combat + wounded` подходит только в бою и только ниже configured wounded threshold.
+- В бою подходящий combat-only image имеет приоритет над non-combat wounded/status image; для wounded-in-combat нужен отдельный image с обеими настройками.
+- Если combat images есть, но ни один не подходит по всем условиям, используется обычная HP/status/manual/default логика.
+- Active Effect override остается выше combat logic и выбирает image напрямую.
 
 Status matching учитывает:
 
@@ -235,6 +246,7 @@ Status matching нормализует значения перед сравне�
 Active Effect override behavior:
 
 - Активные эффекты на actor с `changes[].key = "mta.settoken"` или `"mta.setportrait"` имеют приоритет над HP/status/manual persistence.
+- Для Foundry v14 те же override читаются также из `system.changes`, потому что Active Effects V2 мигрирует структуру изменений.
 - Если несколько активных эффектов задают один атрибут, побеждает последний найденный change при обходе `actor.effects`.
 - При создании/обновлении/удалении эффекта с MTA-атрибутами используется force activation с игнорированием manual persistence, чтобы при отключении эффекта токен/портрет вернулись к текущему HP/status/default расчету.
 
@@ -269,6 +281,7 @@ Link mode хранится в `global.linkTokenPortrait`.
 - `getDynamicRingUpdate()` строит update payload для включения Dynamic Ring, сохраняет original ring state в `originalRing`, применяет ring/background colors и subject scale.
 - `getDisableRingUpdate()` сохраняет original ring state при необходимости и явно ставит `ring.enabled = false`.
 - `getRestoreRingUpdate()` восстанавливает original ring, очищает stale `subject.texture`, удаляет `originalRing` flag.
+- Enable/disable ring updates используют dotted paths (`ring.enabled`, `ring.colors.*`, `ring.subject.*`), чтобы не затирать дополнительные поля Foundry v14+ ring schema.
 - Эти функции в основном возвращают payload, а фактический `tokenDocument.update()` делает вызывающий код.
 - В `ready` hook GM выставляет core `dynamicTokenRingScaling = "grid"`, что нужно для корректной отрисовки колец.
 
@@ -391,6 +404,7 @@ Files:
 - Карточка изображения централизована в `templates/partials/image-card.hbs`.
 - Settings panel markup находится в `templates/settings-panel.hbs`.
 - Manual token dialog markup генерируется inline в `MultiTokenArtManager.mjs`, а стили для него находятся в `styles/multi-tokenart.css`.
+- Стили модуля используют scoped reset внутри `.multi-tokenart` и manual/first-run dialog selectors должны оставаться заскоупленными под `.multi-tokenart`, чтобы UI меньше наследовал стили игровых систем.
 
 ## Карта файлов
 

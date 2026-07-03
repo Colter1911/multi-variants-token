@@ -14,6 +14,7 @@
     "MTA.ScaleX": "Масштаб X",
     "MTA.ScaleY": "Масштаб Y",
     "MTA.AutoEnable": "Авто-смена",
+    "MTA.CombatEnable": "Смена в бою",
     "MTA.WoundedEnable": "При ранении",
     "MTA.WoundedPercent": "% Ранения",
     "MTA.DieEnable": "При смерти (0 HP)",

@@ -32,18 +32,13 @@ export function getDynamicRingUpdate(tokenDocument, ringConfig) {
     updates[`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ORIGINAL_RING}`] = currentRing;
   }
 
-  // Ring Config
-  updates.ring = {
-    enabled: ringConfig.enabled,
-    colors: {
-      ring: ringConfig.ringColor,
-      background: ringConfig.backgroundColor
-    },
-    subject: {
-      scale: userScale * subjectScaleCorrection,
-      texture: ringConfig.texture || null // Explicitly use configured texture or CLEAR it to use token image
-    }
-  };
+  // Use dotted paths to avoid wiping any current or future ring schema fields.
+  updates["ring.enabled"] = ringConfig.enabled;
+  updates["ring.colors.ring"] = ringConfig.ringColor;
+  updates["ring.colors.background"] = ringConfig.backgroundColor;
+  updates["ring.subject.scale"] = userScale * subjectScaleCorrection;
+  // Explicitly use configured texture or CLEAR it to use token image.
+  updates["ring.subject.texture"] = ringConfig.texture || null;
 
   return updates;
 }
@@ -104,10 +99,8 @@ export function getDisableRingUpdate(tokenDocument) {
     updates[`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ORIGINAL_RING}`] = currentRing;
   }
 
-  // 2. Explicitly Disable Ring
-  updates.ring = {
-    enabled: false
-  };
+  // 2. Explicitly Disable Ring without replacing the rest of the ring object.
+  updates["ring.enabled"] = false;
 
   return updates;
 }

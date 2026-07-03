@@ -14,6 +14,7 @@
   "MTA.ScaleX": "Scale X",
   "MTA.ScaleY": "Scale Y",
   "MTA.AutoEnable": "Auto Enable",
+  "MTA.CombatEnable": "In Combat",
   "MTA.WoundedEnable": "Wounded Enable",
   "MTA.WoundedPercent": "Wounded %",
   "MTA.DieEnable": "Die (0 hp)",

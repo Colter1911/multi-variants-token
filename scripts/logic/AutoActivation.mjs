@@ -83,8 +83,35 @@ function normalizeEffectChangeKey(key) {
   return String(key ?? "").trim().toLowerCase();
 }
 
-function getEffectChanges(effect) {
-  return Array.isArray(effect?.changes) ? effect.changes : [];
+function collectIterableValues(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (value instanceof Set) return Array.from(value);
+  if (value instanceof Map) return Array.from(value.values());
+  if (typeof value.values === "function") return Array.from(value.values());
+  if (value?.[Symbol.iterator]) return Array.from(value);
+  if (typeof value === "object") return Object.values(value);
+  return [];
+}
+
+function getEffectChangeCandidates(effect) {
+  const objectData = typeof effect?.toObject === "function" ? effect.toObject() : null;
+  return [
+    effect?.changes,
+    effect?.system?.changes,
+    objectData?.changes,
+    objectData?.system?.changes,
+    effect?._source?.changes,
+    effect?._source?.system?.changes
+  ];
+}
+
+export function getEffectChanges(effect) {
+  for (const candidate of getEffectChangeCandidates(effect)) {
+    const changes = collectIterableValues(candidate);
+    if (changes.length) return changes;
+  }
+  return [];
 }
 
 function parseImageIndex(value) {
@@ -103,6 +130,26 @@ export function activeEffectHasMtaImageOverride(effect) {
     return key === MTA_EFFECT_ATTRIBUTES.TOKEN_IMAGE_INDEX
       || key === MTA_EFFECT_ATTRIBUTES.PORTRAIT_IMAGE_INDEX;
   });
+}
+
+function buildPrototypeTokenImageUpdate({ image, scaleX, scaleY }) {
+  return {
+    "prototypeToken.texture.src": image.src,
+    "prototypeToken.texture.scaleX": scaleX,
+    "prototypeToken.texture.scaleY": scaleY
+  };
+}
+
+function refreshTokenObject(tokenDocument) {
+  const object = tokenDocument?.object;
+  if (!object) return;
+
+  if (typeof object.renderFlags?.set === "function") {
+    object.renderFlags.set({ refresh: true });
+    return;
+  }
+
+  object.refresh?.();
 }
 
 function getActiveEffectImageOverrideIndexes(actor) {
@@ -131,6 +178,69 @@ function getActiveEffectImageOverrideIndexes(actor) {
 
 function getTokenTextureSrc(tokenDocument) {
   return tokenDocument?.texture?.src ?? null;
+}
+
+function isCombatStarted(combat) {
+  if (!combat) return false;
+  if (combat.started === false) return false;
+  if (combat.started === true) return true;
+
+  const round = Number(combat.round);
+  return !Number.isFinite(round) || round > 0;
+}
+
+function getTokenDocumentSceneId(tokenDocument) {
+  return tokenDocument?.parent?.id ?? tokenDocument?.scene?.id ?? null;
+}
+
+function getCombatantTokenDocument(combatant) {
+  if (combatant?.token?.document) return combatant.token.document;
+  if (combatant?.token?.documentName === "Token") return combatant.token;
+  if (combatant?.tokenDocument?.documentName === "Token") return combatant.tokenDocument;
+  return null;
+}
+
+function getCombatantTokenId(combatant) {
+  return combatant?.tokenId
+    ?? combatant?.token?.id
+    ?? combatant?.token?.document?.id
+    ?? combatant?.tokenDocument?.id
+    ?? null;
+}
+
+function getCombatantSceneId(combatant) {
+  return combatant?.sceneId
+    ?? combatant?.scene?.id
+    ?? combatant?.token?.parent?.id
+    ?? combatant?.token?.document?.parent?.id
+    ?? combatant?.tokenDocument?.parent?.id
+    ?? null;
+}
+
+function combatantMatchesTokenDocument(combatant, tokenDocument) {
+  if (!combatant || !tokenDocument) return false;
+
+  const combatantTokenDocument = getCombatantTokenDocument(combatant);
+  if (combatantTokenDocument === tokenDocument) return true;
+  if (combatantTokenDocument?.uuid && tokenDocument.uuid && combatantTokenDocument.uuid === tokenDocument.uuid) return true;
+
+  const tokenId = tokenDocument.id ?? null;
+  const combatantTokenId = getCombatantTokenId(combatant);
+  if (!tokenId || !combatantTokenId || tokenId !== combatantTokenId) return false;
+
+  const tokenSceneId = getTokenDocumentSceneId(tokenDocument);
+  const combatantSceneId = getCombatantSceneId(combatant);
+  return !tokenSceneId || !combatantSceneId || tokenSceneId === combatantSceneId;
+}
+
+export function isTokenInActiveCombat(tokenDocument) {
+  if (!tokenDocument) return false;
+
+  const activeCombat = game?.combat ?? null;
+  if (!isCombatStarted(activeCombat)) return false;
+
+  const combatants = activeCombat?.combatants ? Array.from(activeCombat.combatants) : [];
+  return combatants.some((combatant) => combatantMatchesTokenDocument(combatant, tokenDocument));
 }
 
 export function isExternalTokenImageOverrideActive(tokenDocument) {
@@ -285,6 +395,7 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
   const hpValue = hp.current;
   const hpPercent = hp.percent;
   const getWoundedThreshold = (image) => Number(image?.autoEnable?.woundedPercent ?? 50);
+  const isInCombat = isTokenInActiveCombat(tokenDocument);
 
   const tokenStatuses = getTokenStatusValues(tokenDocument);
   const hasStatusMatch = (image) => {
@@ -296,47 +407,37 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
     return hasMatchingStatus(tokenStatuses, wantedStatus);
   };
 
-  // Logic: Find the highest priority matching image
-  // 1. DEAD (HP <= 0)
-  const die = imageList.filter(i => i.autoEnable?.enabled && i.autoEnable?.die && hpValue <= 0);
+  const autoCandidates = imageList
+    .map((image, index) => getMatchingAutoCandidate({
+      image,
+      index,
+      isInCombat,
+      hpValue,
+      hpPercent,
+      getWoundedThreshold,
+      hasStatusMatch
+    }))
+    .filter(Boolean);
 
-  // 2. STATUS (selected status is present on token)
-  const statusMatched = imageList.filter((i) => hasStatusMatch(i));
+  if (isInCombat) {
+    const combatSelection = selectBestAutoCandidate(
+      autoCandidates.filter((candidate) => candidate.combat),
+      { includeCombatOnly: true }
+    );
+    if (combatSelection) return combatSelection;
+  }
 
-  // 3. WOUNDED (HP <= threshold)
-  // FIX: Removed 'hpValue > 0' check. 
-  // This allows Wounded images to be selected even at 0 HP if no explicit Die image exists.
-  const wounded = imageList
-    .filter((i) => i.autoEnable?.enabled && i.autoEnable?.wounded && hpPercent <= getWoundedThreshold(i))
-    .sort((a, b) => {
-      const thresholdDiff = getWoundedThreshold(a) - getWoundedThreshold(b);
-      if (thresholdDiff !== 0) return thresholdDiff;
-      return Number(a?.sort ?? 0) - Number(b?.sort ?? 0);
-    });
-
-  if (die.length) {
-    return die[0];
-  }
-  if (statusMatched.length) {
-    return statusMatched[0];
-  }
-  if (wounded.length) {
-    // Return the most severe wounded match first.
-    // Example: at 5% HP, the 10% variant should override the 50% variant.
-    return wounded[0];
-  }
+  const ordinarySelection = selectBestAutoCandidate(
+    autoCandidates.filter((candidate) => !candidate.combat)
+  );
+  if (ordinarySelection) return ordinarySelection;
 
   // 2. Manual Image Check (Persistence)
   const activeImg = imageList.find(i => i.id === activeId);
 
   if (activeImg && !ignoreManualSelection) {
-    // Is the current image "Special" (Die/Status/Wounded)?
-    const hasConfiguredStatus = Boolean(String(activeImg.autoEnable?.status ?? "").trim());
-    const isSpecialInfo = activeImg.autoEnable?.enabled
-      && (activeImg.autoEnable?.die || activeImg.autoEnable?.wounded || hasConfiguredStatus);
-
     // If it's NOT special, and valid, we keep it (Manual override persistence)
-    if (!isSpecialInfo) {
+    if (!isAutoSpecialImage(activeImg)) {
       return activeImg;
     }
 
@@ -353,8 +454,76 @@ export function findBestImageForHp({ actor, tokenDocument, imageList, activeId, 
   }
 
   // 3. Fallback to Default
-  const defaultImage = imageList.find(i => i.isDefault) ?? null;
+  const defaultImage = imageList.find(i => i.isDefault && !i.autoEnable?.combat) ?? imageList.find(i => i.isDefault) ?? null;
   return defaultImage;
+}
+
+function hasConfiguredStatus(image) {
+  return Boolean(String(image?.autoEnable?.status ?? "").trim());
+}
+
+function isAutoSpecialImage(image) {
+  if (!image?.autoEnable?.enabled) return false;
+  return Boolean(
+    image.autoEnable.combat
+    || image.autoEnable.die
+    || image.autoEnable.wounded
+    || hasConfiguredStatus(image)
+  );
+}
+
+function getMatchingAutoCandidate({ image, index, isInCombat, hpValue, hpPercent, getWoundedThreshold, hasStatusMatch }) {
+  const auto = image?.autoEnable;
+  if (!auto?.enabled) return null;
+
+  const combat = Boolean(auto.combat);
+  const die = Boolean(auto.die);
+  const wounded = Boolean(auto.wounded);
+  const status = hasConfiguredStatus(image);
+  if (!combat && !die && !wounded && !status) return null;
+
+  if (combat && !isInCombat) return null;
+  if (die && hpValue > 0) return null;
+  if (status && !hasStatusMatch(image)) return null;
+
+  const woundedThreshold = getWoundedThreshold(image);
+  if (wounded && hpPercent > woundedThreshold) return null;
+
+  return {
+    image,
+    index,
+    combat,
+    die,
+    wounded,
+    woundedThreshold,
+    status
+  };
+}
+
+function selectBestAutoCandidate(candidates, { includeCombatOnly = false } = {}) {
+  if (!candidates.length) return null;
+
+  const die = candidates.find((candidate) => candidate.die);
+  if (die) return die.image;
+
+  const status = candidates.find((candidate) => candidate.status);
+  if (status) return status.image;
+
+  const wounded = candidates
+    .filter((candidate) => candidate.wounded)
+    .sort((a, b) => {
+      const thresholdDiff = a.woundedThreshold - b.woundedThreshold;
+      if (thresholdDiff !== 0) return thresholdDiff;
+      return Number(a.image?.sort ?? a.index) - Number(b.image?.sort ?? b.index);
+    });
+  if (wounded.length) return wounded[0].image;
+
+  if (includeCombatOnly) {
+    const combatOnly = candidates.find((candidate) => candidate.combat);
+    if (combatOnly) return combatOnly.image;
+  }
+
+  return null;
 }
 
 export async function applyTokenImageById({ actor, tokenDocument, imageId, imageObject = null }) {
@@ -384,9 +553,7 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
   // Apply to prototype token so future placed tokens inherit the selection.
   if (!tokenDocument) {
     await actor.update({
-      "prototypeToken.texture.src": image.src,
-      "prototypeToken.texture.scaleX": appliedTextureScaleX,
-      "prototypeToken.texture.scaleY": appliedTextureScaleY,
+      ...buildPrototypeTokenImageUpdate({ image, scaleX: appliedTextureScaleX, scaleY: appliedTextureScaleY }),
       [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id
     });
 
@@ -416,9 +583,9 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
   const currentActiveId = tokenDocument.getFlag(MODULE_ID, TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID);
   const currentImage = data.tokenImages.find(i => i.id === currentActiveId);
 
-  if (image.autoEnable?.enabled && currentImage && !currentImage.autoEnable?.enabled) {
+  if (isAutoSpecialImage(image) && currentImage && !isAutoSpecialImage(currentImage)) {
     updates[`flags.${MODULE_ID}.preConditionImageId`] = currentActiveId;
-  } else if (!image.autoEnable?.enabled) {
+  } else if (!isAutoSpecialImage(image)) {
     updates[`flags.${MODULE_ID}.preConditionImageId`] = null;
   }
 
@@ -449,18 +616,14 @@ export async function applyTokenImageById({ actor, tokenDocument, imageId, image
 
   await tokenDocument.update(updates, updateOptions);
 
-  if (tokenDocument.object) {
-    tokenDocument.object.refresh();
-  }
+  refreshTokenObject(tokenDocument);
 
   // Linked token: persist token image selection to actor/prototype so changes are shared.
   const isLinkedToken = Boolean(tokenDocument.actorLink ?? tokenDocument.isLinked);
   if (isLinkedToken) {
     try {
       await actor.update({
-        "prototypeToken.texture.src": image.src,
-        "prototypeToken.texture.scaleX": appliedTextureScaleX,
-        "prototypeToken.texture.scaleY": appliedTextureScaleY,
+        ...buildPrototypeTokenImageUpdate({ image, scaleX: appliedTextureScaleX, scaleY: appliedTextureScaleY }),
         [`flags.${MODULE_ID}.${TOKEN_FLAG_KEYS.ACTIVE_TOKEN_IMAGE_ID}`]: image.id
       }, { mtaManualUpdate: true });
     } catch (error) {
@@ -503,9 +666,9 @@ export async function applyPortraitById({ actor, tokenDocument, imageId, imageOb
     const currentImage = data.portraitImages.find(i => i.id === currentActiveId);
 
     // We need to store this flag as well
-    if (image.autoEnable?.enabled && currentImage && !currentImage.autoEnable?.enabled) {
+    if (isAutoSpecialImage(image) && currentImage && !isAutoSpecialImage(currentImage)) {
       updates[`flags.${MODULE_ID}.preConditionPortraitId`] = currentActiveId;
-    } else if (!image.autoEnable?.enabled) {
+    } else if (!isAutoSpecialImage(image)) {
       updates[`flags.${MODULE_ID}.preConditionPortraitId`] = null;
     }
 

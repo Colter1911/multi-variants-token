@@ -1,6 +1,7 @@
 import { IMAGE_TYPES, MODULE_ID } from "../constants.mjs";
 import { getStatusOptionsForSelectedSystem, normalizeStatusValue } from "../system-support.mjs";
 import { getActorModuleData, setActorModuleData } from "../utils/flag-utils.mjs";
+import { getFilePickerClass } from "../utils/file-utils.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -141,7 +142,13 @@ export class SettingsPanel extends HandlebarsApplicationMixin(ApplicationV2) {
 
   #onBrowse(event) {
     const input = event.currentTarget.previousElementSibling;
-    const picker = new FilePicker({
+    const FilePickerClass = getFilePickerClass();
+    if (!FilePickerClass) {
+      ui.notifications.error("FilePicker is not available.");
+      return;
+    }
+
+    const picker = new FilePickerClass({
       type: "image",
       current: input.value,
       callback: (path) => { input.value = path; }

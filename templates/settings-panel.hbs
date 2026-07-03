@@ -30,6 +30,12 @@
     </label>
 
     <label>
+      <span class="label-text">{{localize "MTA.CombatEnable"}}</span>
+      <input type="checkbox" name="autoEnable.combat" {{checked image.autoEnable.combat}} {{#unless
+        image.autoEnable.enabled}}disabled{{/unless}} />
+    </label>
+
+    <label>
       <span class="label-text">{{localize "MTA.WoundedEnable"}}</span>
       <input type="checkbox" name="autoEnable.wounded" {{checked image.autoEnable.wounded}} {{#unless
         image.autoEnable.enabled}}disabled{{/unless}} />
